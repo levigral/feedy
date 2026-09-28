@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { addressKey, isViewingEvent, splitPostcode } from "@/lib/diary";
 import { agencyEmail, agencyName, isFeedbackComplete } from "@/lib/labels";
+import { env } from "@/lib/env.server";
 import { sendViaGmail } from "@/lib/gmail-smtp";
 import { staffLoginEmail } from "@/lib/staff-login";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
@@ -223,7 +224,6 @@ async function ensureStaffLoginColumns() {
 }
 
 const ADMIN_USERNAME = "levi@gralgroup.co.uk";
-const ADMIN_PASSWORD = "Lettings123!";
 
 async function upsertCredential(userId: string, password: string) {
   const sql = await db();
@@ -271,7 +271,9 @@ export const prepareSignIn = createServerFn({ method: "GET" }).handler(async () 
     }
     return { username: ADMIN_USERNAME };
   }
-  const userId = await createCredentialUser("Levi Holland", ADMIN_USERNAME, ADMIN_PASSWORD);
+  const initialPassword = env("ADMIN_INITIAL_PASSWORD");
+  if (!initialPassword) return { username: ADMIN_USERNAME };
+  const userId = await createCredentialUser("Levi Holland", ADMIN_USERNAME, initialPassword);
   if (existing[0]) {
     await sql`
       update staff set user_id = ${userId}, name = 'Levi Holland', email = ${staffLoginEmail(ADMIN_USERNAME)},
