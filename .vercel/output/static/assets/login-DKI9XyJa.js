@@ -1,0 +1,1 @@
+import{t as e}from"./login-panel-BUpM8hNt.js";var t=e;export{t as component};
