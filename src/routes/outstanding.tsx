@@ -35,11 +35,11 @@ function OutstandingPage() {
       <PageTitle title="Outstanding feedback" />
       {note ? <p className="mb-3 text-sm text-good">{note}</p> : null}
       {error ? <p className="mb-3 text-sm text-bad">{error}</p> : null}
-      <p className="mb-4 max-w-2xl text-sm text-muted">Each viewing sits with the negotiator who carried it out. Their chased percentage is how many of their viewings have been emailed to the landlord.</p>
+      <p className="mb-4 max-w-2xl text-sm text-muted">Each viewing sits with the negotiator who carried it out. The chased percentage only counts viewings from before today.</p>
       <div className="flex flex-wrap gap-2">
         <button type="button" className={`h-11 rounded-full px-4 text-sm ${focus === 0 ? "bg-pine text-pine-ink" : "border border-line bg-card"}`} onClick={() => setFocus(0)}>Everyone · {everyone}</button>
         {chasing.map((person) => {
-          const chased = person.viewings ? Math.round((person.done / person.viewings) * 100) : 0;
+          const chased = person.chased ?? 100;
           return (
             <button key={person.id} type="button" className={`h-11 rounded-full px-4 text-sm ${focus === person.id ? "bg-pine text-pine-ink" : "border border-line bg-card"}`} onClick={() => setFocus(person.id)}>
               {person.name} · {person.outstanding} to chase · {chased}%
@@ -51,7 +51,7 @@ function OutstandingPage() {
         {queue.length === 0 ? <p className="text-sm text-muted">No feedback outstanding.</p> : groups.map((person) => {
           const rows = queue.filter((viewing) => viewing.negotiatorId === person.id);
           if (!rows.length) return null;
-          const chased = person.viewings ? Math.round((person.done / person.viewings) * 100) : 0;
+          const chased = person.chased ?? 100;
           return (
             <section key={person.id}>
               <h2 className="font-display text-2xl">{person.name}</h2>

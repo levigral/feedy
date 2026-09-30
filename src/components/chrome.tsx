@@ -18,7 +18,6 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { createPortal } from "react-dom";
 import { LoginPanel } from "@/components/login-panel";
 import { getBearerToken, isSignedOutOnPurpose } from "@/lib/auth/client";
-import { hasGateSessionMarker } from "@/lib/auth/gate-session-marker";
 import { changeOwnPassword } from "@/lib/office";
 
 type Me = Awaited<ReturnType<typeof getMe>>;
@@ -50,9 +49,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const [agency, setAgencyState] = useState("all");
   const [passwordTick, setPasswordTick] = useState(0);
   const [open, setOpen] = useState(false);
-  const signedInWithPassword = passwordTick >= 0 && Boolean(getBearerToken());
-  const gateOnly = hasGateSessionMarker() && !signedInWithPassword;
-  const signedOut = isSignedOutOnPurpose();
+  const signedOut = isSignedOutOnPurpose() && !getBearerToken();
   const path = useRouterState({ select: (state) => state.location.pathname });
 
   useEffect(() => {
@@ -78,7 +75,7 @@ export function Shell({ children }: { children: ReactNode }) {
   if (isPending) {
     return <div className="grid min-h-screen place-items-center bg-paper text-muted">Opening the office book…</div>;
   }
-  if (!user || gateOnly || signedOut) return <LoginPanel onSignedIn={() => setPasswordTick((value) => value + 1)} />;
+  if (!user || signedOut) return <LoginPanel key={passwordTick} onSignedIn={() => setPasswordTick((value) => value + 1)} />;
   if (me?.mustChangePassword) {
     return <ChangePassword name={me.name} onDone={refreshMe} />;
   }

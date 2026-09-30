@@ -80,6 +80,12 @@ function getH3Event() {
 function getRequest() {
 	return getH3Event().req;
 }
+function getRequestHeaders() {
+	return getH3Event().req.headers;
+}
+function getRequestHeader(name) {
+	return getRequestHeaders().get(name) || void 0;
+}
 /**
 * Set a cookie value by name.
 * @param name Name of the cookie to set
@@ -106,7 +112,7 @@ var HEADERS = { TSS_SHELL: "X-TSS_SHELL" };
 * the dev styles URL for route-scoped CSS collection.
 */
 async function getStartManifest(matchedRoutes) {
-	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-pWQfaI4N.mjs");
+	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-5bDyobX_.mjs");
 	const startManifest = tsrStartManifest();
 	let routes = startManifest.routes;
 	routes[rootRouteId];
@@ -128,75 +134,119 @@ async function getStartManifest(matchedRoutes) {
 var manifest = {
 	"09dc536fba612986bcee0c6f23e26b4c6cee038a2bf69f9893989a02e9c51c5b": {
 		functionName: "saveMailbox_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"131720d6a909f57c2ca1d51ae58ffeaea1a9296a69dbf7c2f3c33345dd7f93cb": {
+		functionName: "saveBranchGmail_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"1d185155ad87b876d3c2ef155c2f6363fb3984dc9a1e4bfd5d922e3cdddfcead": {
 		functionName: "listStaff_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"25c670279bfdf0bf41335e970b5735d316c6beeef020d9e886d4e5a125190055": {
 		functionName: "importDiary_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"2726da936f8f59c1e2adb3ae81c891c219ad3c3f801b8bcf7458fc3fd0cb571e": {
 		functionName: "archiveProperty_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"2add3df0539fd084f6dd9c35c2990cd6c35fcf70da9613f18304b49188cb7358": {
 		functionName: "saveProperty_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"4033e886d774c190c8a1760c2898f14b3ba152f1e46d3e18cc45a380208d9cb7": {
 		functionName: "setLetAgreed_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"48866bd60eca7445f1d1d37cf24cb091d9b955a1dd3cfea6077b0b7f4b056dbb": {
+		functionName: "sendBranchGmailTest_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"526df20b630dfe9a7bbb2d4bfa5669773e426c7c2ed9c8165337b4dcbbf3c036": {
 		functionName: "markContacted_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"5872cee24fcd4b69bb477c8ee4e6b58c4a0c3746f71057fc781c1768c411747e": {
+		functionName: "saveLandlord_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"6214ef86f9d5c180c2f4f0632a91966775984a07d405b7a2d23253d26b2edd18": {
+		functionName: "changeOwnPassword_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"64bbcf04a40bb8b0a6aa31e4d779127f3f3fe9161289f26b826e55a035e86f13": {
 		functionName: "saveStaff_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"6a39be271979d8787b7ec2547bca79649b0682ba37992a2bd32503ee4c02958a": {
+		functionName: "markApplication_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"7671403ad0962b351a811b94149f985bc9d3180d1c0aa93e9a10c498cfc2b793": {
 		functionName: "getMe_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"7720e7ee327b5c863988df24004991dae4a1a790ef09d9157bbfbbc542bcf58e": {
 		functionName: "saveFeedback_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"8d29326e646abc4ff1ea14a838f3778f7e7e92c64e9c374214a4862056066a09": {
+		functionName: "prepareSignIn_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"94706ad269d302c23548779aee6baf83c2bfa11c70d58ab01e654cd7b23b839b": {
+		functionName: "deleteViewing_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"a2ec0219b673bd37537f43717656ad3a35d5b0dd398c44a3127a75ce0af17122": {
 		functionName: "sendFeedback_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"a4708e3a4bfb043d512297d219c798e960771a6b211be4b58e30c8eebb485022": {
 		functionName: "listViewings_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"a86a5a17c8bd870616fa40726c11dbc5a5eca4fbe365530d15cea9d15319e2f9": {
 		functionName: "addViewing_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"ab5c0a91dd902a7f35fffd853d02be49a888dfd7ab666ad3854404d3cf5a552b": {
+		functionName: "saveGmailTrial_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"ac435b4244718d231225394a834ee098c99be1868b50aca6acd84a429af66387": {
 		functionName: "getReports_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"b3abc658381b8a2655c7e0ad71692bcda5a05daaf22e079e70f30dafbf36c7b8": {
 		functionName: "getProperty_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"ba122b7adc434d32af21ab8d4a33dfbfe85ab454e4d68b0851e625c2c2211b29": {
 		functionName: "listProperties_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"bd168c26832bb285b623842f4f8eb4ef0fc87c53e5567f4f960511cbfb14f10b": {
 		functionName: "getBoard_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"d9680284442d861927abb7259d24b004767dc82e9be8a057c06048ef5a0de34e": {
+		functionName: "resetStaffPassword_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"dc24496dd2b9bd42833d2d8de5fe25504afea90c4c5d27ce77e00ca7cb554659": {
+		functionName: "sendGmailTest_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	},
 	"e35f4ebbd7a9ac007a3b1c8381138b3eadf6518f0d0cd684ccefa080ad8874c4": {
 		functionName: "getSettings_createServerFn_handler",
-		importer: () => import("./office-C3T9NCJy.mjs")
+		importer: () => import("./office-D-b8GL3Y.mjs")
+	},
+	"fa5ca405739130f44b40fdeb653c103b9aef6c989f3b64221e54ca601100ff6e": {
+		functionName: "resolveLogin_createServerFn_handler",
+		importer: () => import("./office-D-b8GL3Y.mjs")
 	}
 };
 async function getServerFnById(id, access) {
@@ -1466,7 +1516,7 @@ var getBaseManifest = getProdBaseManifest;
 var createEarlyHintsForRequest = createEarlyHintsCollector;
 async function loadEntries() {
 	const [routerEntry, startEntry, pluginAdapters] = await Promise.all([
-		import("./router-CHnq8sEm.mjs").then((n) => n.t),
+		import("./router-BjwAJETe.mjs").then((n) => n.t),
 		import("./start-5Z2QO8AU.mjs"),
 		import("./empty-plugin-adapters-D9UWiqvJ.mjs")
 	]);
@@ -1904,7 +1954,10 @@ async function handleServerRoutes({ getRouter, request, url, executeRouter, cont
 	}
 	return normalizeSsrResponse(response);
 }
-var server_exports = /* @__PURE__ */ __exportAll$1({ setCookie: () => setCookie$1 });
+var server_exports = /* @__PURE__ */ __exportAll$1({
+	getRequestHeader: () => getRequestHeader,
+	setCookie: () => setCookie$1
+});
 var fetch = createStartHandler(defaultStreamHandler);
 function createServerEntry(entry) {
 	return { async fetch(...args) {

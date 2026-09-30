@@ -19,6 +19,7 @@ export type DraftViewing = {
   notes: string;
   keep: boolean;
   issue: string;
+  issues: string[];
 };
 
 const MONTHS: Record<string, number> = {
@@ -174,6 +175,12 @@ type ColumnMap = {
   notes?: number;
 };
 
+function isViewerNameHeader(header: string): boolean {
+  const text = header.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!text || /phone|mobile|tel|e-?mail|address/.test(text)) return false;
+  return /\b(viewer|applicant|tenant|attendee)s?\b/.test(text);
+}
+
 function landlordSlot(header: string): 0 | 1 | 2 {
   const text = header.toLowerCase().replace(/[_-]+/g, " ");
   if (!text.includes("landlord")) return 0;
@@ -207,9 +214,9 @@ function headerMap(row: string[]): ColumnMap | null {
     else if (map.time == null && /\btime\b/i.test(text)) map.time = index;
     else if (map.event == null && /event|appointment|^type$|^subject$|^category$|^description$/i.test(text)) {
       map.event = index;
-    } else if (map.address == null && /address|property|street/i.test(text) && !/email/i.test(text)) {
+    } else if (map.address == null && /address|property|street/i.test(text) && !/email/i.test(text) && !isViewerNameHeader(text)) {
       map.address = index;
-    } else if (map.viewer == null && /applicant|viewer|tenant|attendee/i.test(text)) map.viewer = index;
+    } else if (map.viewer == null && isViewerNameHeader(text)) map.viewer = index;
     else if (map.phone == null && /phone|mobile|tel/i.test(text)) map.phone = index;
     else if (map.email == null && /e-?mail/i.test(text)) map.email = index;
     else if (map.notes == null && /^notes$|comment/i.test(text)) map.notes = index;
@@ -378,8 +385,7 @@ export function parseDiaryMatrix(matrix: string[][]): DraftViewing[] {
     const eventCell = map ? cell(rawRow, map.event) : "";
     const namedCell = rawRow.find((value) => isPersonName(value)) ?? "";
     const staffName = pickStaff(staffCell || namedCell, line, currentStaff);
-    const parsedColumnDate = parseUkDate(dateCell);
-    const rawDate = parsedColumnDate ? dateCell : parseUkDate(line) || currentDate;
+    const rawDate = dateCell ? dateCell : parseUkDate(line) || currentDate;
     const rawTime = parseTime(timeCell) ? timeCell : line;
     let address = "";
     if (addressCell && !isViewingEvent(addressCell) && addressCell.length > 3) address = addressCell;
@@ -468,7 +474,58 @@ function draftFromParts(parts: {
     notes: parts.notes.trim(),
     keep,
     issue: keep ? "" : issues[0] ?? "",
+    issues,
   };
+}
+
+function emailProblem(value: string, label: string): string {
+  const parts = value.split(/[;,]/).map((part) => part.trim()).filter(Boolean);
+  if (parts.some((part) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(part))) return `${label} is not a valid email`;
+  return "";
+}
+
+/** Problems that must be fixed before a diary row is saved. */
+export function reviewDiaryRow(
+  row: Pick<DraftViewing, "staffName" | "date" | "time" | "address" | "viewerName" | "viewerEmail" | "landlordEmail" | "landlordEmail2">,
+  options?: { requireViewer?: boolean },
+): string[] {
+  const issues: string[] = [];
+  if (!row.staffName.trim()) issues.push("Staff name is missing");
+  if (!row.date) issues.push("Date is missing or not a valid day/month/year");
+  if (!row.time.trim() || !parseTime(row.time)) issues.push("Time is missing or not a valid time");
+  if (!row.address.trim()) issues.push("Property address is missing");
+  if (options?.requireViewer && !row.viewerName.trim()) issues.push("Viewer name is missing");
+  const viewerEmail = emailProblem(row.viewerEmail, "Viewer email");
+  const landlordEmail = emailProblem(row.landlordEmail, "Landlord email");
+  const landlordEmail2 = emailProblem(row.landlordEmail2, "Second landlord email");
+  if (viewerEmail) issues.push(viewerEmail);
+  if (landlordEmail) issues.push(landlordEmail);
+  if (landlordEmail2) issues.push(landlordEmail2);
+  return issues;
+}
+
+/** Re-check a file, including rows that repeat the same viewing. */
+export function prepareDiaryImport(rows: DraftViewing[], options?: { requireViewer?: boolean }): DraftViewing[] {
+  const seen = new Set<string>();
+  return rows.map((row) => {
+    const issues = reviewDiaryRow(row, options);
+    const key = [row.staffName, row.date, row.time, row.address, row.viewerName].map((part) => part.trim().toLowerCase()).join("|");
+    const comparable = Boolean(row.staffName.trim() && row.date && row.address.trim() && row.time.trim());
+    if (comparable && seen.has(key)) issues.push("This viewing is repeated in the file");
+    if (comparable) seen.add(key);
+    return { ...row, issues, issue: issues.join(". ") };
+  });
+}
+
+/** Header problems for a spreadsheet diary. Empty when the expected columns are present. */
+export function diaryColumnWarnings(matrix: string[][]): string[] {
+  const found = findColumns(matrix);
+  if (!found) return ["No header row was found. The first row should include staff, date, time and Viewer Name."];
+  const warnings: string[] = [];
+  if (found.map.time == null) warnings.push("No time column was found.");
+  if (found.map.viewer == null) warnings.push("No Viewer Name column was found.");
+  if (found.map.address == null && found.map.event == null) warnings.push("No property or event column was found.");
+  return warnings;
 }
 
 export function matrixFromText(text: string): string[][] {

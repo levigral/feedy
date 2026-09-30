@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Badge, buttonClass, Field, inputClass, Modal, PageTitle, quietClass, useOffice } from "@/components/chrome";
 import { emptyProperty } from "@/components/property-form";
-import { agencyFromFilename, parseDiaryMatrix, type DraftViewing } from "@/lib/diary";
+import { agencyFromFilename, diaryColumnWarnings, parseDiaryMatrix, prepareDiaryImport, type DraftViewing } from "@/lib/diary";
 import { matrixFromFile } from "@/lib/diary-file";
 import { UkDateInput } from "@/components/uk-date";
 import { ageLabel, feedbackTone, formatUk, statusLabel, todayIso } from "@/lib/labels";
@@ -10,9 +10,29 @@ import { useEffect, useState } from "react";
 
 export const Route = createFileRoute("/viewings")({ component: ViewingsPage });
 
-type FileDraft = { name: string; agency: "" | "al" | "gr"; rows: DraftViewing[]; error: string };
+type FileDraft = { name: string; agency: "" | "al" | "gr"; rows: DraftViewing[]; error: string; note: string };
 type ImportSummary = Awaited<ReturnType<typeof importDiary>>;
 type LetMatch = ImportSummary["letAgreed"][number];
+
+function isSpreadsheet(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith(".csv") || lower.endsWith(".tsv") || lower.endsWith(".txt") || lower.endsWith(".xlsx") || lower.endsWith(".xls");
+}
+
+function checkedRows(name: string, rows: DraftViewing[]): DraftViewing[] {
+  return prepareDiaryImport(rows, { requireViewer: isSpreadsheet(name) }).map((row) => ({
+    ...row,
+    keep: row.issues.length === 0,
+  }));
+}
+
+function checkNote(rows: DraftViewing[]): string {
+  const ready = rows.filter((row) => row.issues.length === 0).length;
+  const blocked = rows.length - ready;
+  if (!rows.length) return "";
+  if (!blocked) return `Checked ${rows.length} viewing${rows.length === 1 ? "" : "s"}. All rows are valid. Nothing is saved until you press Import.`;
+  return `Checked ${rows.length} viewing${rows.length === 1 ? "" : "s"}. ${ready} ready. ${blocked} need fixing and will not be imported.`;
+}
 
 function diaryRow(row: DraftViewing, agency: string) {
   return {
@@ -59,9 +79,10 @@ function ViewingsPage() {
 
   function summaryText(summary: ImportSummary, fileName?: string) {
     const names = summary.createdStaff.length ? ` New staff: ${summary.createdStaff.join(", ")}.` : "";
+    const viewers = summary.namedViewings ? ` Viewer names added to ${summary.namedViewings} viewing${summary.namedViewings === 1 ? "" : "s"}.` : "";
     const ask = summary.letAgreed.length ? ` ${summary.letAgreed.length} already let agreed — choose whether to keep the old landlord details.` : "";
     const lead = fileName ? `${fileName}: ` : "";
-    return `${lead}${summary.createdViewings} viewings added, ${summary.createdProperties} new properties. Addresses already on the system were not added again.${names}${ask}`;
+    return `${lead}${summary.createdViewings} viewings added, ${summary.createdProperties} new properties. Addresses already on the system were not added again.${names}${viewers}${ask}`;
   }
 
   function load() {
@@ -79,51 +100,53 @@ function ViewingsPage() {
     for (const file of Array.from(list)) {
       try {
         const matrix = await matrixFromFile(file);
-        const parsed = parseDiaryMatrix(matrix);
+        const warnings = isSpreadsheet(file.name) ? diaryColumnWarnings(matrix) : [];
+        const reviewed = checkedRows(file.name, parseDiaryMatrix(matrix));
         const fileAgency = agencyFromFilename(file.name) || (agency === "gr" || agency === "al" ? agency : "");
-        const ready = parsed.filter((row) => row.keep && row.address.trim() && fileAgency);
-        const held = fileAgency ? parsed.filter((row) => !row.keep) : parsed;
-        if (ready.length) {
-          const summary = await importDiary({
-            data: { rows: ready.map((row) => diaryRow(row, fileAgency)) },
-          });
-          rememberMatches(summary.letAgreed);
-          setResult((current) => `${current ? `${current} ` : ""}${summaryText(summary, file.name)} Other appointments were ignored.`);
-          load();
-        }
-        if (!parsed.length) {
+        if (!reviewed.length) {
           next.push({
             name: file.name,
             agency: fileAgency,
             rows: [],
-            error: "No viewing appointments were found. Only lines with the word viewing are used.",
+            note: "",
+            error: [warnings.join(" "), "No viewing appointments were found. Only lines with the word viewing are used."].filter(Boolean).join(" "),
           });
-        } else if (held.length) {
-          next.push({
-            name: file.name,
-            agency: fileAgency,
-            rows: held,
-            error: fileAgency
-              ? "Add the property address on each row, then create them. New negotiators are added to staff."
-              : "Choose the agency and add the property address. New negotiators are added to staff.",
-          });
+          continue;
         }
+        next.push({
+          name: file.name,
+          agency: fileAgency,
+          rows: reviewed,
+          note: checkNote(reviewed),
+          error: warnings.join(" "),
+        });
       } catch (err) {
-        next.push({ name: file.name, agency: "", rows: [], error: err instanceof Error ? err.message : "Could not read that diary" });
+        next.push({ name: file.name, agency: "", rows: [], note: "", error: err instanceof Error ? err.message : "Could not read that diary" });
       }
     }
     setFiles((current) => [...next, ...current]);
   }
 
   function update(fileIndex: number, rowIndex: number, patch: Partial<DraftViewing>) {
-    setFiles((current) => current.map((file, index) => index === fileIndex ? { ...file, rows: file.rows.map((row, inner) => inner === rowIndex ? { ...row, ...patch } : row) } : file));
+    setFiles((current) => current.map((file, index) => {
+      if (index !== fileIndex) return file;
+      const edited = file.rows.map((row, inner) => inner === rowIndex ? { ...row, ...patch } : row);
+      const checked = prepareDiaryImport(edited, { requireViewer: isSpreadsheet(file.name) });
+      const rows = checked.map((row, inner) => {
+        const previous = edited[inner];
+        const chosen = patch.keep !== undefined && inner === rowIndex ? patch.keep : previous?.keep;
+        const becameValid = (previous?.issues.length ?? 0) > 0 && row.issues.length === 0;
+        return { ...row, keep: row.issues.length === 0 ? (becameValid ? true : Boolean(chosen)) : false };
+      });
+      return { ...file, rows, note: checkNote(rows) };
+    }));
   }
 
   async function confirm() {
-    const chosen = files.flatMap((file) => file.rows.filter((row) => row.keep).map((row) => ({ ...row, agency: file.agency })));
-    if (!chosen.length) { setError("Tick the viewing rows you want, and choose an agency for each file."); return; }
+    const chosen = files.flatMap((file) => file.rows.filter((row) => row.keep && row.issues.length === 0).map((row) => ({ ...row, agency: file.agency })));
+    if (!chosen.length) { setError("Nothing is ready to import. Fix the rows marked in red, and choose an agency."); return; }
     if (chosen.some((row) => row.agency !== "al" && row.agency !== "gr")) { setError("Choose Andrew Lees or Gibbins Richards for each diary."); return; }
-    if (chosen.some((row) => !row.date || !row.staffName || !row.address.trim())) { setError("Each ticked row needs a staff name, a date and a property address."); return; }
+    if (chosen.some((row) => row.issues.length > 0)) { setError("Fix the rows marked in red before importing."); return; }
     setBusy(true);
     setError("");
     try {
@@ -132,7 +155,12 @@ function ViewingsPage() {
       });
       rememberMatches(summary.letAgreed);
       setResult(summaryText(summary));
-      setFiles([]);
+      setFiles((current) => current
+        .map((file) => {
+          const rows = file.rows.filter((row) => row.issues.length > 0);
+          return { ...file, rows, note: checkNote(rows) };
+        })
+        .filter((file) => file.rows.length > 0));
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Import failed");
@@ -175,7 +203,7 @@ function ViewingsPage() {
       <section className="rounded-2xl border border-line bg-card p-4">
         <h2 className="font-display text-2xl">Import a diary</h2>
         <p className="mt-1 max-w-2xl text-sm text-muted">
-          Drop a diary, or a CSV with staff_member, appointment_date and appointment_time. Appointments that say viewing are kept. An address already on the system is not added again. If it was let agreed, you can keep the old landlord details or start a new property.
+          Drop a CSV diary. Feedy checks staff, date, time, property, Viewer Name and any email addresses before anything is saved. Appointments that say viewing are kept. Fix any row marked in red, then press Import.
         </p>
         <label className="mt-4 grid min-h-28 cursor-pointer place-items-center rounded-2xl border border-dashed border-line bg-paper text-center">
           <span className="px-4 py-6 text-sm">Drop PDF, Excel or CSV diaries here, or click to choose</span>
@@ -191,6 +219,7 @@ function ViewingsPage() {
                 <option value="gr">Gibbins Richards Lettings</option>
               </select>
             </div>
+            {file.note ? <p className="mt-2 text-sm">{file.note}</p> : null}
             {file.error ? <p className="mt-2 text-sm text-bad">{file.error}</p> : null}
             <div className="mt-2 overflow-x-auto">
               <table className="w-full min-w-[46rem] text-left text-sm">
@@ -201,13 +230,14 @@ function ViewingsPage() {
                     <th className="py-2 pr-2">Date</th>
                     <th className="py-2 pr-2">Time</th>
                     <th className="py-2 pr-2">Event</th>
+                    <th className="py-2 pr-2">Viewer</th>
                     <th className="py-2">Property</th>
                   </tr>
                 </thead>
                 <tbody>
                   {file.rows.map((row, rowIndex) => (
-                    <tr key={`${row.id}-${rowIndex}`} className="border-t border-line align-top">
-                      <td className="py-2 pr-2"><input type="checkbox" className="mt-3 size-5" checked={row.keep} onChange={(event) => update(fileIndex, rowIndex, { keep: event.target.checked })} /></td>
+                    <tr key={`${row.id}-${rowIndex}`} className={`border-t border-line align-top ${row.issues.length ? "bg-bad-bg" : ""}`}>
+                      <td className="py-2 pr-2"><input type="checkbox" className="mt-3 size-5" checked={row.keep} disabled={row.issues.length > 0} onChange={(event) => update(fileIndex, rowIndex, { keep: event.target.checked })} /></td>
                       <td className="py-2 pr-2"><input className={inputClass} value={row.staffName} onChange={(event) => update(fileIndex, rowIndex, { staffName: event.target.value })} /></td>
                       <td className="py-2 pr-2">
                         <UkDateInput value={row.date} onChange={(date) => update(fileIndex, rowIndex, { date })} />
@@ -219,6 +249,7 @@ function ViewingsPage() {
                         <p>{row.event || "—"}</p>
                         {row.issue ? <p className="text-xs text-bad">{row.issue}</p> : null}
                       </td>
+                      <td className="py-2 pr-2"><input className={inputClass} value={row.viewerName} placeholder="Viewer name" onChange={(event) => update(fileIndex, rowIndex, { viewerName: event.target.value })} /></td>
                       <td className="py-2"><input className={inputClass} value={row.address} placeholder="Property address" onChange={(event) => update(fileIndex, rowIndex, { address: event.target.value })} /></td>
                     </tr>
                   ))}
@@ -227,7 +258,7 @@ function ViewingsPage() {
             </div>
           </div>
         ))}
-        {files.length ? <button type="button" className={`${buttonClass} mt-4`} disabled={busy} onClick={() => void confirm()}>{busy ? "Saving…" : "Create properties and viewings"}</button> : null}
+        {files.some((file) => file.rows.some((row) => row.keep && row.issues.length === 0)) ? <button type="button" className={`${buttonClass} mt-4`} disabled={busy} onClick={() => void confirm()}>{busy ? "Saving…" : "Import ready viewings"}</button> : null}
         {result ? <p className="mt-3 text-sm text-good">{result}</p> : null}
         {letAgreed.map((match) => {
           const previous = [match.landlordName, match.landlordEmail, match.landlordName2, match.landlordEmail2].filter((item) => item && item !== "To be added");

@@ -1,9 +1,9 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Badge, buttonClass, Field, inputClass, Modal, Progress, quietClass, useOffice } from "@/components/chrome";
 import { UkDateInput } from "@/components/uk-date";
 import { PropertyForm } from "@/components/property-form";
 import { agencyEmail, agencyName, ageLabel, feedbackTone, formatUk, isFeedbackComplete, statusLabel, todayIso } from "@/lib/labels";
-import { addViewing, archiveProperty, emailDraft, getProperty, getSettings, listStaff, markApplication, markContacted, saveFeedback, saveLandlord, saveProperty, sendFeedback, setLetAgreed } from "@/lib/office";
+import { addViewing, archiveProperty, decideApplication, emailDraft, getProperty, getSettings, listStaff, markApplication, markContacted, saveFeedback, saveLandlord, saveProperty, sendFeedback, setLetAgreed } from "@/lib/office";
 import { useEffect, useState } from "react";
 
 export const Route = createFileRoute("/properties/$propertyId")({
@@ -14,29 +14,23 @@ export const Route = createFileRoute("/properties/$propertyId")({
   component: PropertyPage,
 });
 
-const NOTES = [
-  ["overall", "Overall impression"],
-  ["condition", "Property condition"],
-  ["decoration", "Decoration"],
-  ["kitchen", "Kitchen"],
-  ["bathroom", "Bathroom"],
-  ["bedrooms", "Bedrooms"],
-  ["garden", "Garden / outside"],
-  ["location", "Location"],
-  ["parking", "Parking"],
-  ["price", "Rental price"],
-  ["size", "Size"],
-  ["cleanliness", "Cleanliness"],
-  ["maintenance", "Maintenance concerns"],
-  ["improvements", "Suggested improvements"],
-  ["reasons", "Reasons for not proceeding"],
-  ["other", "Other comments"],
+const FEEDBACK_OPTIONS = [
+  ["interested", "Interested"],
+  ["not_interested", "Not interested"],
+  ["no_feedback", "Feedback not given"],
 ] as const;
+
+function selectedInterest(interest: string): string {
+  if (interest === "interested" || interest === "very_interested") return "interested";
+  if (interest === "not_interested" || interest === "no_feedback") return interest;
+  return "";
+}
 
 function PropertyPage() {
   const { propertyId } = Route.useParams();
   const { feedback } = Route.useSearch();
   const { me } = useOffice();
+  const navigate = useNavigate();
   const [data, setData] = useState<Awaited<ReturnType<typeof getProperty>> | null>(null);
   const [staff, setStaff] = useState<Awaited<ReturnType<typeof listStaff>>>([]);
   const [error, setError] = useState("");
@@ -45,6 +39,8 @@ function PropertyPage() {
   const [feedbackId, setFeedbackId] = useState<number | null>(null);
   const [mailId, setMailId] = useState<number | null>(null);
   const [letOpen, setLetOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
 
   function load() {
     getProperty({ data: { id: Number(propertyId) } })
@@ -60,7 +56,9 @@ function PropertyPage() {
   if (error) return <p className="text-bad">{error}</p>;
   if (!data) return <p className="text-muted">Loading property…</p>;
   const property = data.property;
-  const percent = property.viewings ? Math.round((property.feedbackDone / property.viewings) * 100) : 0;
+  const pastViewings = property.historicViewings ?? property.viewings;
+  const pastDone = property.historicDone ?? property.feedbackDone;
+  const percent = pastViewings ? Math.round((pastDone / pastViewings) * 100) : 100;
   const letDays = property.letAgreedOn && property.firstViewing ? daysBetween(property.firstViewing, property.letAgreedOn) : null;
   const feedbackViewing = data.viewings.find((row) => row.id === feedbackId) ?? null;
   const mailViewing = data.viewings.find((row) => row.id === mailId) ?? null;
@@ -76,12 +74,15 @@ function PropertyPage() {
         <div className="flex flex-wrap gap-2">
           <button type="button" className={buttonClass} onClick={() => setViewingOpen(true)}>Add viewing</button>
           <button type="button" className={quietClass} onClick={() => setEditing(true)}>Edit</button>
+          {me?.role === "admin" ? (
+            <button type="button" className={quietClass} onClick={() => { setConfirmText(""); setDeleteOpen(true); }}>Delete</button>
+          ) : null}
         </div>
       </div>
       <section className="mt-4 grid gap-3 sm:grid-cols-3">
         <article className="rounded-2xl border border-line bg-card p-4 sm:col-span-2">
           <p className="font-display text-2xl">{property.status === "let_agreed" || property.status === "let" ? `${property.viewings} viewings to let` : `${property.viewings} viewings so far`}</p>
-          <p className="text-sm text-muted">{property.feedbackDone} emailed to the landlord · {property.viewings - property.feedbackDone} outstanding · {percent}%</p>
+          <p className="text-sm text-muted">{property.feedbackDone} emailed to the landlord · {property.viewings - property.feedbackDone} outstanding · {percent}% of past viewings. Today is not counted until tomorrow.</p>
           <div className="mt-3"><Progress value={percent} /></div>
           {property.letAgreedOn ? <p className="mt-2 text-sm">Agreed by {property.letAgreedByName || "staff"} on {formatUk(property.letAgreedOn)}{letDays != null ? ` · ${letDays} days from the first viewing` : ""}</p> : null}
           <div className="mt-3 flex flex-wrap gap-2">
@@ -125,7 +126,11 @@ function PropertyPage() {
               )}
               <button type="button" className={quietClass} onClick={() => setMailId(viewing.id)}>Email landlord</button>
               {viewing.interest === "interested" || viewing.interest === "very_interested" ? (
-                viewing.applicationStatus === "across" ? (
+                viewing.applicationStatus === "accepted" ? (
+                  <button type="button" className={quietClass} onClick={() => { void decideApplication({ data: { id: viewing.id, decision: "undo" } }).then(load).catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not undo")); }}>Undo accept</button>
+                ) : viewing.applicationStatus === "declined" ? (
+                  <span className="inline-flex h-11 items-center rounded-full bg-bad-bg px-4 text-sm text-bad">Application declined</span>
+                ) : viewing.applicationStatus === "across" ? (
                   <button type="button" className={quietClass} onClick={() => { void markApplication({ data: { id: viewing.id, across: false } }).then(load); }}>Application with landlord</button>
                 ) : (
                   <button type="button" className={buttonClass} onClick={() => { void markApplication({ data: { id: viewing.id, across: true } }).then(load); }}>Application sent to landlord</button>
@@ -207,6 +212,31 @@ function PropertyPage() {
           <LetForm staff={staff} defaultStaff={property.negotiatorId ?? me?.id ?? 0} onCancel={() => setLetOpen(false)} onSave={async (staffId, on) => { await setLetAgreed({ data: { id: property.id, staffId, on } }); setLetOpen(false); load(); }} />
         </Modal>
       ) : null}
+      {deleteOpen ? (
+        <Modal title="Delete this property" onClose={() => setDeleteOpen(false)}>
+          <p className="text-sm">This removes {property.address}, including its viewings and feedback. Type DELETE in capital letters to confirm.</p>
+          <div className="mt-3">
+            <Field label="Type DELETE">
+              <input className={inputClass} value={confirmText} autoComplete="off" onChange={(event) => setConfirmText(event.target.value)} />
+            </Field>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={buttonClass}
+              disabled={confirmText !== "DELETE"}
+              onClick={() => {
+                void archiveProperty({ data: { id: property.id, hard: true } })
+                  .then(() => { void navigate({ to: "/properties" }); })
+                  .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not delete the property"));
+              }}
+            >
+              Delete property
+            </button>
+            <button type="button" className={quietClass} onClick={() => setDeleteOpen(false)}>Cancel</button>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }
@@ -250,57 +280,50 @@ function ViewingModal({ propertyId, staff, defaultStaff, onClose, onSaved }: { p
 }
 
 function FeedbackModal({ viewing, onClose, onSaved }: { viewing: { id: number; interest: string; feedbackText: string; feedback: Record<string, string>; viewedOn: string; time: string; negotiatorName: string; address: string; viewerName: string }; onClose: () => void; onSaved: () => void }) {
-  const [interest, setInterest] = useState(viewing.interest || "interested");
+  const [interest, setInterest] = useState(selectedInterest(viewing.interest));
   const [feedbackText, setFeedbackText] = useState(viewing.feedbackText);
-  const [fields, setFields] = useState<Record<string, string>>(viewing.feedback);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  function save(event: { preventDefault: () => void }) {
+    event.preventDefault();
+    if (!interest) {
+      setError("Choose Interested, Not interested, or Feedback not given.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    void saveFeedback({ data: { id: viewing.id, interest, feedbackText: feedbackText.trim(), fields: viewing.feedback } })
+      .then(onSaved)
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Could not save");
+        setBusy(false);
+      });
+  }
   return (
     <Modal title="Add feedback" onClose={onClose}>
-      <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void saveFeedback({ data: { id: viewing.id, interest, feedbackText, fields } }).then(onSaved).catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not save")); }}>
+      <form className="grid gap-3" onSubmit={save}>
         <div className="rounded-xl bg-paper px-3 py-2 text-sm">
           <p className="font-medium">{formatUk(viewing.viewedOn)} {viewing.time}</p>
           <p>{viewing.negotiatorName || "Negotiator not set"}</p>
           <p className="text-muted">{viewing.address}{viewing.viewerName ? ` · ${viewing.viewerName}` : ""}</p>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            ["very_interested", "Very interested"],
-            ["interested", "Interested"],
-            ["undecided", "Undecided"],
-            ["not_interested", "Not interested"],
-          ].map(([id, label]) => (
-            <button key={id} type="button" className={`h-11 rounded-xl border ${interest === id ? "border-pine bg-pine text-pine-ink" : "border-line"}`} onClick={() => setInterest(id)}>{label}</button>
+        <div className="grid gap-2">
+          {FEEDBACK_OPTIONS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={`h-12 rounded-xl border text-base ${interest === id ? "border-pine bg-pine text-pine-ink" : "border-line"}`}
+              onClick={() => setInterest(id)}
+            >
+              {label}
+            </button>
           ))}
         </div>
-        <button
-          type="button"
-          className={`h-11 rounded-xl border ${interest === "no_feedback" ? "border-pine bg-pine text-pine-ink" : "border-line"}`}
-          onClick={() => {
-            const note = "The applicant did not want to give feedback on the viewing. We will re-chase this and try to get the feedback.";
-            setInterest("no_feedback");
-            setFeedbackText(note);
-            void saveFeedback({ data: { id: viewing.id, interest: "no_feedback", feedbackText: note, fields } })
-              .then(onSaved)
-              .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not save"));
-          }}
-        >
-          No feedback given
-        </button>
-        <Field label="Viewer feedback">
-          <textarea className="min-h-36 w-full rounded-xl border border-line p-3" value={feedbackText} onChange={(event) => setFeedbackText(event.target.value)} placeholder="Paste what the viewer said" />
+        <Field label="Feedback given">
+          <textarea className="min-h-28 w-full rounded-xl border border-line p-3" value={feedbackText} onChange={(event) => setFeedbackText(event.target.value)} placeholder="What the applicant said" />
         </Field>
-        <details>
-          <summary className="cursor-pointer text-sm text-muted">Room by room notes, if you want them</summary>
-          <div className="mt-3 grid gap-3">
-            {NOTES.map(([key, label]) => (
-              <Field key={key} label={label}>
-                <input className={inputClass} value={fields[key] ?? ""} onChange={(event) => setFields((current) => ({ ...current, [key]: event.target.value }))} />
-              </Field>
-            ))}
-          </div>
-        </details>
         {error ? <p className="text-sm text-bad">{error}</p> : null}
-        <button type="submit" className={buttonClass}>Save feedback</button>
+        <button type="submit" className={buttonClass} disabled={busy}>{busy ? "Saving…" : "Save feedback"}</button>
       </form>
     </Modal>
   );
@@ -325,26 +348,31 @@ function MailModal({
   const [landlordEmail2, setLandlordEmail2] = useState(viewing.landlordEmail2);
   const [to, setTo] = useState([viewing.landlordEmail, viewing.landlordEmail2].filter(Boolean).join(", "));
   const noFeedback = viewing.interest === "no_feedback";
-  const [subject, setSubject] = useState(noFeedback ? `Viewing update — ${viewing.address}` : `Viewing feedback — ${viewing.address}`);
+  const [subject, setSubject] = useState(`${noFeedback ? "Viewing update" : "Viewing feedback"} — ${viewing.address}`);
   const [body, setBody] = useState(emailDraft({
     landlord: viewing.landlordName,
     address: viewing.address,
     when: `${formatUk(viewing.viewedOn)} ${viewing.time}`.trim(),
     feedback: viewing.feedbackText,
-    interest: statusLabel(viewing.interest),
+    interest: viewing.interest,
     negotiator: viewing.negotiatorName || meName,
     agency,
-    noFeedback,
   }));
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [trialFrom, setTrialFrom] = useState("");
+  const [mailboxes, setMailboxes] = useState<Awaited<ReturnType<typeof getSettings>>>([]);
   useEffect(() => {
-    getSettings().then((rows) => {
-      const gmail = rows.find((row) => row.agency === "gmail" && row.live);
-      setTrialFrom(gmail?.fromAddress ?? "");
-    }).catch(() => setTrialFrom(""));
+    getSettings().then(setMailboxes).catch(() => setMailboxes([]));
   }, []);
+  const branch = mailboxes.find((row) => row.agency === agency);
+  const shared = mailboxes.find((row) => row.agency === "gmail" && row.live);
+  const branchGmail = branch?.kind === "smtp" && branch.live ? branch.fromAddress : "";
+  const fromAddress = branchGmail || shared?.fromAddress || branch?.fromAddress || agencyEmail(agency);
+  const fromNote = branchGmail
+    ? `This email will come from ${branchGmail} · ${agencyName(agency)}`
+    : shared?.fromAddress
+      ? `No Gmail is switched on for ${agencyName(agency)}. This email will come from the shared Gmail ${shared.fromAddress}.`
+      : `From ${fromAddress} · ${agencyName(agency)}. Add this branch’s Gmail in Settings before sending.`;
   return (
     <Modal title="Email landlord" onClose={onClose} wide>
       <form className="grid gap-3" onSubmit={(event) => {
@@ -355,7 +383,7 @@ function MailModal({
           .catch((err: unknown) => setMessage(err instanceof Error ? err.message : "Could not send"))
           .finally(() => setBusy(false));
       }}>
-        <p className="text-sm text-muted">{trialFrom ? `Trial: this email will come from ${trialFrom}, not the agency address.` : `From ${agencyEmail(agency)} · ${agencyName(agency)}`}</p>
+        <p className="text-sm text-muted">{fromNote}</p>
         <Field label="Landlord name"><input className={inputClass} value={landlordName} onChange={(event) => setLandlordName(event.target.value)} /></Field>
         <Field label="Landlord email">
           <input className={inputClass} value={landlordEmail} onChange={(event) => { const next = event.target.value; setLandlordEmail(next); setTo([next, landlordEmail2].filter(Boolean).join(", ")); }} placeholder="name@email.com" />
@@ -374,10 +402,9 @@ function MailModal({
               address: viewing.address,
               when: `${formatUk(viewing.viewedOn)} ${viewing.time}`.trim(),
               feedback: viewing.feedbackText,
-              interest: statusLabel(viewing.interest),
+              interest: viewing.interest,
               negotiator: viewing.negotiatorName || meName,
               agency: next,
-              noFeedback: viewing.interest === "no_feedback",
             }));
           }}>
             <option value="al">Andrew Lees Lettings</option>

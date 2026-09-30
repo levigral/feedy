@@ -1,20 +1,22 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { buttonClass, inputClass, Modal, PageTitle, useOffice } from "@/components/chrome";
+import { buttonClass, Field, inputClass, Modal, PageTitle, quietClass, useOffice } from "@/components/chrome";
 import { agencyName, statusLabel } from "@/lib/labels";
-import { listProperties, listStaff, saveProperty } from "@/lib/office";
+import { archiveProperty, listProperties, listStaff, saveProperty } from "@/lib/office";
 import { useEffect, useState } from "react";
 import { PropertyForm, emptyProperty } from "@/components/property-form";
 
 export const Route = createFileRoute("/properties/")({ component: PropertiesPage });
 
 function PropertiesPage() {
-  const { agency } = useOffice();
+  const { agency, me } = useOffice();
   const [rows, setRows] = useState<Awaited<ReturnType<typeof listProperties>>>([]);
   const [staff, setStaff] = useState<Awaited<ReturnType<typeof listStaff>>>([]);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("available");
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
+  const [remove, setRemove] = useState<{ id: number; address: string } | null>(null);
+  const [confirmText, setConfirmText] = useState("");
 
   function load() {
     listProperties().then(setRows).catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not load properties"));
@@ -48,15 +50,21 @@ function PropertiesPage() {
       {error ? <p className="mb-3 text-sm text-bad">{error}</p> : null}
       <div className="grid gap-2">
         {visible.length === 0 ? <p className="text-sm text-muted">No properties on this list. Import a diary or add one.</p> : visible.map((row) => (
-          <Link key={row.id} to="/properties/$propertyId" params={{ propertyId: String(row.id) }} className="rounded-2xl border border-line bg-card p-4">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <p className="font-medium">{row.address}</p>
-                <p className="text-sm text-muted">{agencyName(row.agency)} · {row.landlordName || "Landlord to be added"} · {row.viewings} viewings</p>
-              </div>
-              <span className="text-sm">{statusLabel(row.status)}</span>
-            </div>
-          </Link>
+          <article key={row.id} className="grid gap-3 rounded-2xl border border-line bg-card p-4 sm:grid-cols-[1fr_auto] sm:items-center">
+            <Link to="/properties/$propertyId" params={{ propertyId: String(row.id) }}>
+              <p className="font-medium">{row.address}</p>
+              <p className="text-sm text-muted">{agencyName(row.agency)} · {row.landlordName || "Landlord to be added"} · {row.viewings} viewings · {statusLabel(row.status)}</p>
+            </Link>
+            {me?.role === "admin" ? (
+              <button
+                type="button"
+                className={quietClass}
+                onClick={() => { setConfirmText(""); setRemove({ id: row.id, address: row.address }); }}
+              >
+                Delete
+              </button>
+            ) : null}
+          </article>
         ))}
       </div>
       {open ? (
@@ -71,6 +79,31 @@ function PropertiesPage() {
               load();
             }}
           />
+        </Modal>
+      ) : null}
+      {remove ? (
+        <Modal title="Delete this property" onClose={() => setRemove(null)}>
+          <p className="text-sm">This removes {remove.address}, including its viewings and feedback. Type DELETE in capital letters to confirm.</p>
+          <div className="mt-3">
+            <Field label="Type DELETE">
+              <input className={inputClass} value={confirmText} autoComplete="off" onChange={(event) => setConfirmText(event.target.value)} />
+            </Field>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={buttonClass}
+              disabled={confirmText !== "DELETE"}
+              onClick={() => {
+                void archiveProperty({ data: { id: remove.id, hard: true } })
+                  .then(() => { setRemove(null); load(); })
+                  .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not delete the property"));
+              }}
+            >
+              Delete property
+            </button>
+            <button type="button" className={quietClass} onClick={() => setRemove(null)}>Cancel</button>
+          </div>
         </Modal>
       ) : null}
     </div>

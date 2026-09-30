@@ -52,7 +52,7 @@ export function statusLabel(status: string): string {
     case "undecided":
       return "Undecided";
     case "no_feedback":
-      return "No feedback given";
+      return "Feedback not given";
     default:
       return status;
   }

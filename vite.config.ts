@@ -1,4 +1,4 @@
-import { copyFileSync, readdirSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
@@ -174,19 +174,21 @@ export default defineConfig(({ command, isPreview }) => ({
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
+            // Do not pass `hooks` here: it replaces the Vercel preset hook that
+            // writes `.vercel/output/config.json`, and publish then looks for `dist`.
             serverDir: "./server",
-            hooks: {
-              compiled() {
-                const dest = ".vercel/output/functions/__server.func/_libs";
-                for (const file of ["pglite.data", "pglite.wasm", "initdb.wasm"]) {
-                  copyFileSync(
-                    `node_modules/@electric-sql/pglite/dist/${file}`,
-                    `${dest}/${file}`,
-                  );
-                }
-              },
-            },
           }),
+          {
+            name: "pglite-runtime",
+            apply: "build",
+            closeBundle() {
+              const dest = ".vercel/output/functions/__server.func/_libs";
+              if (!existsSync(dest)) return;
+              for (const file of ["pglite.data", "pglite.wasm", "initdb.wasm"]) {
+                copyFileSync(`node_modules/@electric-sql/pglite/dist/${file}`, `${dest}/${file}`);
+              }
+            },
+          },
         ]
       : []),
     viteReact(),

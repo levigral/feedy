@@ -1,7 +1,7 @@
 export function StaffTable({
   staff,
 }: {
-  staff: Array<{ id: number; name: string; viewings: number; done: number; outstanding: number; lets: number; avgDays: number | null }>;
+  staff: Array<{ id: number; name: string; viewings: number; done: number; outstanding: number; chased?: number; lets: number; avgDays: number | null }>;
 }) {
   if (!staff.length) return <p className="mt-2 text-sm text-muted">Staff appear here once a diary names them, or you add them.</p>;
   return (
@@ -27,7 +27,7 @@ export function StaffTable({
                 <td className="px-3 py-3">{person.viewings}</td>
                 <td className="px-3 py-3">{person.done}</td>
                 <td className="px-3 py-3">{person.outstanding}</td>
-                <td className="whitespace-nowrap px-3 py-3">{person.viewings ? `${Math.round((person.done / person.viewings) * 100)}%` : "—"}</td>
+                <td className="whitespace-nowrap px-3 py-3">{person.chased ?? (person.viewings ? Math.round((person.done / person.viewings) * 100) : 100)}%</td>
                 <td className="px-3 py-3">{person.lets}</td>
                 <td className="whitespace-nowrap px-3 py-3">
                   {person.viewings ? `${Math.round((person.lets / person.viewings) * 100)}%` : "—"}

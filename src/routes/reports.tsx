@@ -30,7 +30,7 @@ function ReportsPage() {
       {report ? (
         <>
           <p className="font-display text-3xl">{report.percent}% emailed to the landlord</p>
-          <p className="text-sm text-muted">{report.viewings} viewings in this range</p>
+          <p className="text-sm text-muted">{report.viewings} viewings in this range. The percentage leaves out today and later until the next day.</p>
           <div className="mt-3 max-w-md"><Progress value={report.percent} /></div>
           <h2 className="mt-8 font-display text-2xl">By property</h2>
           <ul className="mt-3 grid gap-2">

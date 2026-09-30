@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  diaryColumnWarnings,
   matrixFromPositionedText,
   matrixFromText,
   parseDiaryMatrix,
   parseUkDate,
+  prepareDiaryImport,
 } from "./diary.ts";
 
 test("reads staff, date, time and only Viewing events", () => {
@@ -121,6 +123,39 @@ Levi Holland,2026-09-16,15:30-15:45`),
   assert.equal(drafts[6]?.staffName, "Levi Holland");
   assert.equal(drafts[6]?.date, "2026-09-16");
   assert.equal(drafts[6]?.time, "15:30");
+});
+
+test("checks a csv before import and rejects a bad email, a missing viewer and a repeat", () => {
+  const drafts = prepareDiaryImport(
+    parseDiaryMatrix(
+      matrixFromText(`staff_member,appointment_date,appointment_time,event,property,Viewer Name,landlord_1_email
+Katie Stewart,15/09/2026,10:00,Viewing,12 High Street,Sam Patel,anne@example.com
+Katie Stewart,15/09/2026,10:00,Viewing,12 High Street,Sam Patel,anne@example.com
+Katie Stewart,15/09/2026,11:00,Viewing,4 Queen Street,,not-an-email
+Katie Stewart,32/13/2026,09:00,Viewing,8 King Street,Jo Lee,`),
+    ),
+    { requireViewer: true },
+  );
+  assert.equal(drafts[0]?.issues.length, 0);
+  assert.match(drafts[1]?.issue ?? "", /repeated/);
+  assert.match(drafts[2]?.issue ?? "", /Viewer name is missing/);
+  assert.match(drafts[2]?.issue ?? "", /Landlord email/);
+  assert.match(drafts[3]?.issue ?? "", /Date is missing/);
+  assert.match(diaryColumnWarnings(matrixFromText("staff_member,appointment_date,appointment_time,property\nKatie,15/09/2026,10:00,12 High Street")).join(" "), /Viewer Name/);
+});
+
+test("reads the Viewer Name column onto the viewing", () => {
+  const drafts = parseDiaryMatrix(
+    matrixFromText(`staff_member,appointment_date,appointment_time,property,Viewer Name,landlord_1_name,landlord_1_email
+Katie Stewart,15/09/2026,10:00,12 High Street Bridgwater,Sam Patel,Anne Baker,anne@example.com
+Katie Stewart,15/09/2026,11:30,4 Queen Street,Jo Lee,,`),
+  );
+  assert.equal(drafts.length, 2);
+  assert.equal(drafts[0]?.viewerName, "Sam Patel");
+  assert.equal(drafts[0]?.landlordName, "Anne Baker");
+  assert.equal(drafts[1]?.viewerName, "Jo Lee");
+  assert.match(drafts[1]?.address ?? "", /Queen Street/);
+  assert.equal(drafts[0]?.keep, true);
 });
 
 test("reads landlord 1 and landlord 2 names and emails", () => {

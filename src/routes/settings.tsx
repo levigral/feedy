@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { buttonClass, Field, inputClass, PageTitle, useOffice } from "@/components/chrome";
 import { agencyName } from "@/lib/labels";
-import { getSettings, listStaff, resetStaffPassword, saveGmailTrial, saveMailbox, sendGmailTest } from "@/lib/office";
+import { getSettings, listStaff, resetStaffPassword, saveBranchGmail, saveGmailTrial, sendBranchGmailTest, sendGmailTest } from "@/lib/office";
 import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -23,27 +23,21 @@ function SettingsPage() {
       {me?.role === "admin" ? <PasswordReset onSaved={setMessage} /> : <p className="mb-4 text-sm text-muted">Only an administrator can reset a password.</p>}
       {message ? <p className="mb-3 text-sm text-good">{message}</p> : null}
       <p className="max-w-2xl text-sm text-muted">
-        For a trial, send from your own Gmail. Landlords will see that address, not the agency one. The agency mailboxes below are for Microsoft 365 when you are ready to send as the office.
+        Add a separate Gmail address for each branch. An Andrew Lees viewing sends from the Andrew Lees Gmail. A Gibbins Richards viewing sends from the Gibbins Richards Gmail.
+      </p>
+      <div className="mt-4 grid gap-4">
+        {rows.filter((row) => row.agency === "al" || row.agency === "gr").map((row) => (
+          <BranchGmail key={row.agency} row={row} canEdit={canEdit} onSaved={(text) => { setMessage(text); getSettings().then(setRows); }} />
+        ))}
+      </div>
+      <p className="mt-8 max-w-2xl text-sm text-muted">
+        The box below is only a backup. Use it if you want one Gmail for both branches. A branch with its own Gmail switched on will not use this.
       </p>
       <GmailTrial
         row={rows.find((row) => row.agency === "gmail")}
         canEdit={canEdit}
         onSaved={(text) => { setMessage(text); getSettings().then(setRows); }}
       />
-      <p className="mt-8 max-w-2xl text-sm text-muted">
-        Andrew Lees uses bridgwater@andrewleeslettings.co.uk. Gibbins Richards uses lettings@gibbinsrichards.co.uk.
-      </p>
-      <ol className="mt-4 grid max-w-2xl list-decimal gap-2 pl-5 text-sm text-muted">
-        <li>In Microsoft Entra, register an app in the Microsoft 365 account that owns the mailbox.</li>
-        <li>Add the application permission Mail.Send and grant admin consent.</li>
-        <li>Limit the app to these mailboxes with an application access policy.</li>
-        <li>Paste the tenant ID, application ID and client secret below, then tick send live.</li>
-      </ol>
-      <div className="mt-6 grid gap-4">
-        {rows.filter((row) => row.agency === "al" || row.agency === "gr").map((row) => (
-          <MailboxCard key={row.agency} row={row} canEdit={canEdit} onSaved={(text) => { setMessage(text); getSettings().then(setRows); }} />
-        ))}
-      </div>
     </div>
   );
 }
@@ -175,7 +169,7 @@ function GmailTrial({
   );
 }
 
-function MailboxCard({
+function BranchGmail({
   row,
   canEdit,
   onSaved,
@@ -184,32 +178,59 @@ function MailboxCard({
   canEdit: boolean;
   onSaved: (message: string) => void;
 }) {
-  const [tenantId, setTenantId] = useState(row.tenantId);
-  const [clientId, setClientId] = useState(row.clientId);
-  const [clientSecret, setClientSecret] = useState("");
-  const [live, setLive] = useState(row.live);
+  const savedGmail = row.kind === "smtp" && /@gmail\.com$|@googlemail\.com$/i.test(row.fromAddress);
+  const [address, setAddress] = useState(savedGmail ? row.fromAddress : "");
+  const [appPassword, setAppPassword] = useState("");
+  const [live, setLive] = useState(savedGmail ? row.live : false);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setAddress(savedGmail ? row.fromAddress : "");
+    setLive(savedGmail ? row.live : false);
+  }, [row.fromAddress, row.live, row.kind, savedGmail]);
+  const ready = savedGmail && row.live;
   return (
     <form
-      className="grid gap-3 rounded-2xl border border-line bg-card p-4"
+      className="grid max-w-2xl gap-3 rounded-2xl border border-line bg-card p-4"
       onSubmit={(event) => {
         event.preventDefault();
-        saveMailbox({ data: { agency: row.agency, tenantId, clientId, clientSecret, live } })
-          .then(() => onSaved(`${agencyName(row.agency)} saved`))
-          .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not save"));
+        setBusy(true);
+        setError("");
+        saveBranchGmail({ data: { agency: row.agency, address, appPassword, live } })
+          .then(() => onSaved(live ? `${agencyName(row.agency)} will send from ${address}` : `${agencyName(row.agency)} saved, but not sending yet`))
+          .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not save"))
+          .finally(() => setBusy(false));
       }}
     >
       <div className="flex items-center justify-between gap-2">
         <h2 className="font-display text-2xl">{agencyName(row.agency)}</h2>
-        <span className={`rounded-full px-2 py-1 text-xs ${row.live ? "bg-good-bg text-good" : "bg-wait-bg text-wait"}`}>{row.live ? "Connected" : "Not sending yet"}</span>
+        <span className={`rounded-full px-2 py-1 text-xs ${ready ? "bg-good-bg text-good" : "bg-wait-bg text-wait"}`}>{ready ? "Sending from this Gmail" : "Not sending yet"}</span>
       </div>
-      <p className="text-sm text-muted">Sends as {row.fromAddress}</p>
-      <Field label="Tenant ID"><input className={inputClass} value={tenantId} onChange={(event) => setTenantId(event.target.value)} disabled={!canEdit} /></Field>
-      <Field label="Application ID"><input className={inputClass} value={clientId} onChange={(event) => setClientId(event.target.value)} disabled={!canEdit} /></Field>
-      <Field label="Client secret"><input className={inputClass} value={clientSecret} placeholder={row.hasSecret ? "Saved — paste a new secret to replace it" : "Paste the secret"} onChange={(event) => setClientSecret(event.target.value)} disabled={!canEdit} /></Field>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={live} onChange={(event) => setLive(event.target.checked)} disabled={!canEdit} /> Send live via Microsoft Graph</label>
+      <p className="text-sm text-muted">Create an app password in this Gmail account at Google Account, then App passwords. Name it Feedy. Do not use the normal Gmail password.</p>
+      <Field label="Gmail address"><input className={inputClass} type="email" value={address} placeholder="name@gmail.com" onChange={(event) => setAddress(event.target.value)} disabled={!canEdit} required /></Field>
+      <Field label="App password"><input className={inputClass} value={appPassword} placeholder={savedGmail && row.hasSecret ? "Saved — paste a new one to replace it" : "16-character app password"} onChange={(event) => setAppPassword(event.target.value)} disabled={!canEdit} autoComplete="off" /></Field>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={live} onChange={(event) => setLive(event.target.checked)} disabled={!canEdit} /> Send feedback from this Gmail</label>
       {error ? <p className="text-sm text-bad">{error}</p> : null}
-      {canEdit ? <button className={buttonClass}>Save mailbox</button> : <p className="text-sm text-muted">A manager needs to save this.</p>}
+      {canEdit ? (
+        <div className="flex flex-wrap gap-2">
+          <button className={buttonClass} disabled={busy}>{busy ? "Saving…" : "Save this Gmail"}</button>
+          <button
+            type="button"
+            className="h-11 rounded-full border border-line px-4 text-sm"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError("");
+              sendBranchGmailTest({ data: { agency: row.agency, address, appPassword } })
+                .then(() => onSaved(`Test sent to ${address}`))
+                .catch((err: unknown) => setError(err instanceof Error ? err.message : "Gmail refused the test"))
+                .finally(() => setBusy(false));
+            }}
+          >
+            Send a test to this Gmail
+          </button>
+        </div>
+      ) : <p className="text-sm text-muted">A manager needs to save this.</p>}
     </form>
   );
 }

@@ -48,6 +48,7 @@ const globalRef = globalThis as typeof globalThis & {
   __pgSqlPromise__?: Promise<Sql>;
   __pgliteInstance__?: Promise<import("@electric-sql/pglite").PGlite>;
   __pgliteMigrateChain__?: Promise<void>;
+  __dummyViewingsSeeded?: boolean;
 };
 
 /**
@@ -160,11 +161,47 @@ async function createPgliteSql(): Promise<Sql> {
     .then(migrate);
   globalRef.__pgliteMigrateChain__ = pass;
   await pass;
+  await seedDummyViewings(pg);
 
   return toSql(async <T>(text: string, params: unknown[]) => {
     const result = await pg.query<T>(text, params);
     return result.rows;
   });
+}
+
+async function seedDummyViewings(pg: import("@electric-sql/pglite").PGlite) {
+  if (globalRef.__dummyViewingsSeeded) return;
+  try {
+    const existing = await pg.query<{ id: number }>(
+      "select id from properties where address_key = '12dummyclosetest' limit 1",
+    );
+    if (existing.rows.length === 0) {
+      const inserted = await pg.query<{ id: number }>(
+        `insert into properties (
+          address, address_key, postcode, agency, rent, landlord_name, landlord_email, status, notes
+        ) values (
+          '12 Dummy Close', '12dummyclosetest', 'TA6 4AB', 'al', '950 pcm',
+          'Demo Landlord', 'landlord@example.com', 'available',
+          'Dummy property for testing. Safe to delete.'
+        ) returning id`,
+      );
+      const id = inserted.rows[0]?.id;
+      if (id) {
+        await pg.query(
+          `insert into viewings (
+            property_id, viewed_on, viewed_at, viewer_name, feedback_status, interest,
+            application_status, feedback_text, notes
+          ) values
+            ($1, '2026-09-29', '10:00', 'Alex Morgan', 'awaiting', '', '', '', 'Dummy viewing'),
+            ($1, '2026-09-28', '14:30', 'Sam Patel', 'sent', 'interested', 'across', 'Would like to apply for the property.', 'Dummy viewing')`,
+          [id],
+        );
+      }
+    }
+    globalRef.__dummyViewingsSeeded = true;
+  } catch (err) {
+    console.error("Could not add dummy viewings", err);
+  }
 }
 
 let sqlPromise: Promise<Sql> | null = null;

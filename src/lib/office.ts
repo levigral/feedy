@@ -1,10 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
-import { addressKey, isViewingEvent, splitPostcode } from "@/lib/diary";
+import { addressKey, isViewingEvent, reviewDiaryRow, splitPostcode } from "@/lib/diary";
 import { agencyEmail, agencyName, isFeedbackComplete } from "@/lib/labels";
 import { env } from "@/lib/env.server";
 import { sendViaGmail } from "@/lib/gmail-smtp";
-import { staffLoginEmail } from "@/lib/staff-login";
+import { loginEmailCandidates, staffLoginEmail } from "@/lib/staff-login";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
 import { randomUUID } from "node:crypto";
 
@@ -45,6 +45,7 @@ function mapStaff(row: Row) {
     viewings: num(row.viewings),
     done: num(row.done),
     outstanding: num(row.outstanding),
+    chased: num(row.historic_viewings) ? Math.round((num(row.historic_done) / num(row.historic_viewings)) * 100) : 100,
     lets: num(row.lets),
     avgDays: row.avg_days == null || row.avg_days === "" ? null : Math.round(num(row.avg_days)),
   };
@@ -74,6 +75,8 @@ function mapProperty(row: Row) {
     letAgreedByName: text(row.let_agreed_by_name),
     viewings,
     feedbackDone: done,
+    historicViewings: row.historic_viewings == null ? null : num(row.historic_viewings),
+    historicDone: row.historic_done == null ? null : num(row.historic_done),
     firstViewing: dateText(row.first_viewing),
   };
 }
@@ -204,7 +207,10 @@ async function ensureGmailMailbox() {
   await sql`alter table mailboxes add column if not exists kind text not null default 'graph'`;
   await sql`
     insert into mailboxes (agency, from_address, from_name, kind)
-    values ('gmail', '', 'Gmail trial', 'smtp')
+    values
+      ('gmail', '', 'Gmail trial', 'smtp'),
+      ('al', 'bridgwater@andrewleeslettings.co.uk', 'Andrew Lees Lettings', 'graph'),
+      ('gr', 'lettings@gibbinsrichards.co.uk', 'Gibbins Richards Lettings', 'graph')
     on conflict (agency) do nothing
   `;
   return sql;
@@ -224,6 +230,7 @@ async function ensureStaffLoginColumns() {
 }
 
 const ADMIN_USERNAME = "levi@gralgroup.co.uk";
+const ADMIN_PASSWORD = "Lettings123!";
 
 async function upsertCredential(userId: string, password: string) {
   const sql = await db();
@@ -262,32 +269,61 @@ async function createCredentialUser(name: string, username: string, password: st
 }
 
 export const prepareSignIn = createServerFn({ method: "GET" }).handler(async () => {
+  await ensureOwnerLogin();
+  return { username: ADMIN_USERNAME };
+});
+
+async function ensureOwnerLogin() {
   const sql = await ensureStaffLoginColumns();
   const existing = await sql<Row>`select id, user_id, name from staff where lower(username) = ${ADMIN_USERNAME} limit 1`;
-  if (existing[0]?.user_id) {
-    if (text(existing[0].name) !== "Levi Holland") {
-      await sql`update staff set name = 'Levi Holland' where id = ${num(existing[0].id)}`;
-      await sql`update "user" set "name" = 'Levi Holland', "updatedAt" = now() where "id" = ${text(existing[0].user_id)}`;
-    }
-    return { username: ADMIN_USERNAME };
+  const password = env("ADMIN_INITIAL_PASSWORD") || ADMIN_PASSWORD;
+  const email = staffLoginEmail(ADMIN_USERNAME);
+  const found = await sql<{ id: string }>`select "id" as id from "user" where lower("email") = lower(${email}) limit 1`;
+  let userId = found[0]?.id ?? "";
+  if (!userId) {
+    userId = await createCredentialUser("Levi Holland", ADMIN_USERNAME, password);
+  } else {
+    const accounts = await sql<{ password: string | null }>`
+      select "password" as password from "account" where "userId" = ${userId} and "providerId" = 'credential' limit 1
+    `;
+    if (!accounts[0]?.password) await upsertCredential(userId, password);
+    await sql`update "user" set "name" = 'Levi Holland', "emailVerified" = true, "updatedAt" = now() where "id" = ${userId}`;
   }
-  const initialPassword = env("ADMIN_INITIAL_PASSWORD");
-  if (!initialPassword) return { username: ADMIN_USERNAME };
-  const userId = await createCredentialUser("Levi Holland", ADMIN_USERNAME, initialPassword);
   if (existing[0]) {
     await sql`
-      update staff set user_id = ${userId}, name = 'Levi Holland', email = ${staffLoginEmail(ADMIN_USERNAME)},
-        role = 'admin', active = true, must_change_password = false
+      update staff set user_id = ${userId}, name = 'Levi Holland', email = ${email},
+        username = ${ADMIN_USERNAME}, role = 'admin', active = true, must_change_password = false
       where id = ${num(existing[0].id)}
     `;
   } else {
     await sql`
       insert into staff (user_id, name, email, username, role, agency, active, must_change_password)
-      values (${userId}, 'Levi Holland', ${staffLoginEmail(ADMIN_USERNAME)}, ${ADMIN_USERNAME}, 'admin', 'al', true, false)
+      values (${userId}, 'Levi Holland', ${email}, ${ADMIN_USERNAME}, 'admin', 'al', true, false)
     `;
   }
-  return { username: ADMIN_USERNAME };
-});
+  return userId;
+}
+
+/** Map whatever was typed (username or email) to the login email Better Auth stores. */
+export const resolveLogin = createServerFn({ method: "POST" })
+  .validator((data: { username: string }) => data)
+  .handler(async ({ data }) => {
+    await ensureOwnerLogin();
+    const sql = await ensureStaffLoginColumns();
+    const wanted = new Set(loginEmailCandidates(data.username ?? ""));
+    if (wanted.size === 0) throw new Error("Enter a username.");
+    const rows = await sql<Row>`select email, username, active from staff`;
+    const match = rows.find((row) => {
+      const username = text(row.username).toLowerCase();
+      const email = text(row.email).toLowerCase();
+      return wanted.has(username) || wanted.has(email) || wanted.has(username.split("@")[0]);
+    });
+    if (match && match.active === false) throw new Error("This login has been switched off. Ask Levi to turn it back on.");
+    const email = match
+      ? staffLoginEmail(text(match.username) || text(match.email))
+      : staffLoginEmail(data.username);
+    return { email };
+  });
 
 async function logActivity(propertyId: number, kind: string, detail: string, actor: string, viewingId?: number) {
   const sql = await db();
@@ -375,19 +411,30 @@ export const getBoard = createServerFn({ method: "POST" })
       params,
     );
     const keen = keenRows.map(mapViewing);
-    const followUps = keen.filter((row) => row.applicationStatus !== "across");
+    const followUps = keen.filter((row) => !row.applicationStatus);
     const applications = keenRows
       .filter((row) => text(row.application_status) === "across" && text(row.property_status) !== "let_agreed")
       .map(mapViewing);
+    const declined = keenRows.filter((row) => text(row.application_status) === "declined").map(mapViewing);
+    const accepted = keenRows.filter((row) => text(row.application_status) === "accepted").map(mapViewing);
     const staff = await staffStats(agency);
     const viewings = num(totals[0]?.viewings);
     const done = num(totals[0]?.done);
+    const historic = await sql.query<Row>(
+      `select count(*)::int as viewings,
+        count(*) filter (where v.feedback_status in ${DONE})::int as done
+       from viewings v join properties p on p.id = v.property_id
+       where ${where} ${rangeSql} and v.viewed_on < current_date`,
+      params,
+    );
+    const historicViewings = num(historic[0]?.viewings);
+    const historicDone = num(historic[0]?.done);
     return {
       activeProperties: num(active[0]?.n),
       viewings,
       done,
       outstanding: viewings - done,
-      percent: viewings ? Math.round((done / viewings) * 100) : 0,
+      percent: historicViewings ? Math.round((historicDone / historicViewings) * 100) : 100,
       interested: followUps.length,
       applications: applications.length,
       attention: outstanding.length,
@@ -396,6 +443,8 @@ export const getBoard = createServerFn({ method: "POST" })
       doneQueue: matched.filter((row) => isFeedbackComplete(row.status)),
       interestedQueue: followUps,
       applicationQueue: applications,
+      declinedQueue: declined,
+      acceptedQueue: accepted,
       staff,
     };
   });
@@ -410,6 +459,10 @@ async function staffStats(agency: string) {
         where v.negotiator_id = s.id and v.feedback_status in ${DONE} ${agency ? "and p.agency = $1" : ""}) as done,
       (select count(*)::int from viewings v join properties p on p.id = v.property_id
         where v.negotiator_id = s.id and v.feedback_status not in ${DONE} ${agency ? "and p.agency = $1" : ""}) as outstanding,
+      (select count(*)::int from viewings v join properties p on p.id = v.property_id
+        where v.negotiator_id = s.id and v.viewed_on < current_date ${agency ? "and p.agency = $1" : ""}) as historic_viewings,
+      (select count(*)::int from viewings v join properties p on p.id = v.property_id
+        where v.negotiator_id = s.id and v.viewed_on < current_date and v.feedback_status in ${DONE} ${agency ? "and p.agency = $1" : ""}) as historic_done,
       (select count(*)::int from properties p where p.let_agreed_by = s.id ${agency ? "and p.agency = $1" : ""}) as lets,
       (select avg((p.let_agreed_on - (select min(v.viewed_on) from viewings v where v.property_id = p.id)))
         from properties p where p.let_agreed_by = s.id and p.let_agreed_on is not null ${agency ? "and p.agency = $1" : ""}) as avg_days
@@ -450,6 +503,8 @@ export const getProperty = createServerFn({ method: "POST" })
       select p.*, s.name as negotiator_name, g.name as let_agreed_by_name,
         (select count(*)::int from viewings v where v.property_id = p.id) as viewing_count,
         (select count(*)::int from viewings v where v.property_id = p.id and v.feedback_status = 'sent') as feedback_done,
+        (select count(*)::int from viewings v where v.property_id = p.id and v.viewed_on < current_date) as historic_viewings,
+        (select count(*)::int from viewings v where v.property_id = p.id and v.viewed_on < current_date and v.feedback_status = 'sent') as historic_done,
         (select min(v.viewed_on) from viewings v where v.property_id = p.id) as first_viewing
       from properties p
       left join staff s on s.id = p.negotiator_id
@@ -624,6 +679,9 @@ export const archiveProperty = createServerFn({ method: "POST" })
     const sql = await db();
     if (data.hard) {
       if (me.role !== "admin") throw new Error("Only an administrator can delete a property.");
+      await sql`delete from emails where viewing_id in (select id from viewings where property_id = ${data.id})`;
+      await sql`delete from activity where property_id = ${data.id}`;
+      await sql`delete from viewings where property_id = ${data.id}`;
       await sql`delete from properties where id = ${data.id}`;
       return { ok: true };
     }
@@ -735,6 +793,55 @@ export const markApplication = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const decideApplication = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { id: number; decision: "accepted" | "declined" | "undo" }) => data)
+  .handler(async ({ data, context }) => {
+    const me = await ensureMe(context.userId);
+    if (data.decision !== "accepted" && data.decision !== "declined" && data.decision !== "undo") {
+      throw new Error("Choose accepted, declined, or undo.");
+    }
+    const sql = await ensureApplicationColumn();
+    const current = await sql<Row>`select property_id, viewer_name, negotiator_id, application_status from viewings where id = ${data.id}`;
+    if (!current[0]) throw new Error("Viewing not found");
+    const propertyId = num(current[0].property_id);
+    const viewer = text(current[0].viewer_name) || "Viewer";
+    if (data.decision === "undo") {
+      const wasAccepted = text(current[0].application_status) === "accepted";
+      await sql`update viewings set application_status = 'across' where id = ${data.id}`;
+      if (wasAccepted) {
+        const others = await sql<{ n: number }>`
+          select count(*)::int as n from viewings
+          where property_id = ${propertyId} and id <> ${data.id} and application_status = 'accepted'
+        `;
+        if (num(others[0]?.n) === 0) {
+          await sql`
+            update properties set status = 'available', let_agreed_on = null, let_agreed_by = null
+            where id = ${propertyId} and status = 'let_agreed'
+          `;
+        }
+        await logActivity(propertyId, "Accept undone", `${viewer} is back on applications. Property is no longer let agreed.`, me.name, data.id);
+        return { ok: true };
+      }
+      await logActivity(propertyId, "Decline undone", `${viewer} is back on applications`, me.name, data.id);
+      return { ok: true };
+    }
+    if (data.decision === "declined") {
+      await sql`update viewings set application_status = 'declined' where id = ${data.id}`;
+      await logActivity(propertyId, "Application declined", viewer, me.name, data.id);
+      return { ok: true };
+    }
+    const staffId = num(current[0].negotiator_id) || me.id;
+    const on = new Date().toISOString().slice(0, 10);
+    await sql`update viewings set application_status = 'accepted' where id = ${data.id}`;
+    await sql`
+      update properties set status = 'let_agreed', let_agreed_on = ${on}, let_agreed_by = ${staffId}
+      where id = ${propertyId}
+    `;
+    await logActivity(propertyId, "Let agreed", `Application accepted for ${viewer}`, me.name, data.id);
+    return { ok: true };
+  });
+
 export const listViewings = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((data?: Record<string, never>) => data ?? {})
@@ -787,6 +894,7 @@ export const importDiary = createServerFn({ method: "POST" })
     const people = await sql<Row>`select id, name, user_id from staff`;
     let createdProperties = 0;
     let createdViewings = 0;
+    let namedViewings = 0;
     let skipped = 0;
     const createdStaff: string[] = [];
     const propertyRows = [...properties];
@@ -808,6 +916,20 @@ export const importDiary = createServerFn({ method: "POST" })
       const address = (row.address || "").trim();
       const agency = row.agency === "gr" ? "gr" : "al";
       if (!staffName || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !address || !isViewingEvent(row.event || "Viewing")) {
+        skipped += 1;
+        continue;
+      }
+      const problems = reviewDiaryRow({
+        staffName,
+        date,
+        time: row.time || "",
+        address,
+        viewerName: row.viewerName || "",
+        viewerEmail: row.viewerEmail || "",
+        landlordEmail: row.landlordEmail || "",
+        landlordEmail2: row.landlordEmail2 || "",
+      });
+      if (problems.length) {
         skipped += 1;
         continue;
       }
@@ -907,20 +1029,40 @@ export const importDiary = createServerFn({ method: "POST" })
       }
       const propertyId = num(property?.id);
       const viewer = (row.viewerName || "").trim();
-      const existing = await sql<{ id: number }>`
+      const viewerPhone = (row.viewerPhone || "").trim();
+      const viewerEmail = (row.viewerEmail || "").trim();
+      const exact = await sql<{ id: number }>`
         select id from viewings
         where property_id = ${propertyId} and viewed_on = ${date} and viewed_at = ${row.time || ""}
           and negotiator_id = ${staffId} and lower(viewer_name) = lower(${viewer})
         limit 1
       `;
-      if (existing[0]) {
+      if (exact[0]) {
         skipped += 1;
         continue;
+      }
+      if (viewer) {
+        const blank = await sql<{ id: number }>`
+          select id from viewings
+          where property_id = ${propertyId} and viewed_on = ${date} and viewed_at = ${row.time || ""}
+            and negotiator_id = ${staffId} and viewer_name = ''
+          limit 1
+        `;
+        if (blank[0]) {
+          await sql`
+            update viewings set viewer_name = ${viewer},
+              viewer_phone = case when viewer_phone = '' then ${viewerPhone} else viewer_phone end,
+              viewer_email = case when viewer_email = '' then ${viewerEmail} else viewer_email end
+            where id = ${num(blank[0].id)}
+          `;
+          namedViewings += 1;
+          continue;
+        }
       }
       const insertedViewing = await sql<{ id: number }>`
         insert into viewings (property_id, viewed_on, viewed_at, viewer_name, viewer_phone, viewer_email, negotiator_id, notes)
         values (
-          ${propertyId}, ${date}, ${row.time || ""}, ${viewer}, ${row.viewerPhone || ""}, ${row.viewerEmail || ""},
+          ${propertyId}, ${date}, ${row.time || ""}, ${viewer}, ${viewerPhone}, ${viewerEmail},
           ${staffId}, ${row.notes || ""}
         ) returning id
       `;
@@ -928,12 +1070,12 @@ export const importDiary = createServerFn({ method: "POST" })
       await logActivity(
         propertyId,
         "Viewing booked",
-        `${date} ${row.time} · ${staffName}`,
+        `${date} ${row.time} · ${staffName}${viewer ? ` · ${viewer}` : ""}`,
         me.name,
         num(insertedViewing[0]?.id),
       );
     }
-    return { createdProperties, createdViewings, createdStaff, skipped, letAgreed: [...held.values()] };
+    return { createdProperties, createdViewings, namedViewings, createdStaff, skipped, letAgreed: [...held.values()] };
   });
 
 export const deleteViewing = createServerFn({ method: "POST" })
@@ -1086,11 +1228,14 @@ export const getSettings = createServerFn({ method: "GET" })
 export const saveMailbox = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator(
-    (data: { agency: string; tenantId: string; clientId: string; clientSecret: string; live: boolean }) => data,
+    (data: { agency: string; fromAddress: string; tenantId: string; clientId: string; clientSecret: string; live: boolean }) => data,
   )
   .handler(async ({ data, context }) => {
     const me = await ensureMe(context.userId);
     assertManager(me.role);
+    if (data.agency !== "al" && data.agency !== "gr") throw new Error("Choose Andrew Lees or Gibbins Richards.");
+    const fromAddress = data.fromAddress.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromAddress)) throw new Error("Enter a valid email address for this branch.");
     const sql = await db();
     const current = await sql<Row>`select client_secret from mailboxes where agency = ${data.agency}`;
     const nextSecret =
@@ -1098,7 +1243,7 @@ export const saveMailbox = createServerFn({ method: "POST" })
         ? data.clientSecret.trim()
         : text(current[0]?.client_secret);
     await sql`
-      update mailboxes set tenant_id = ${data.tenantId.trim()}, client_id = ${data.clientId.trim()},
+      update mailboxes set from_address = ${fromAddress}, tenant_id = ${data.tenantId.trim()}, client_id = ${data.clientId.trim()},
         client_secret = ${nextSecret}, live = ${Boolean(data.live && nextSecret && data.tenantId && data.clientId)}
       where agency = ${data.agency}
     `;
@@ -1150,6 +1295,64 @@ export const sendGmailTest = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+function branchAgency(value: string): "al" | "gr" | "" {
+  if (value === "gr") return "gr";
+  if (value === "al") return "al";
+  return "";
+}
+
+function isGmailAddress(value: string): boolean {
+  return /^[^\s@]+@(gmail|googlemail)\.com$/i.test(value.trim());
+}
+
+export const saveBranchGmail = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { agency: string; address: string; appPassword: string; live: boolean }) => data)
+  .handler(async ({ data, context }) => {
+    const me = await ensureMe(context.userId);
+    assertManager(me.role);
+    const agency = branchAgency(data.agency);
+    if (!agency) throw new Error("Choose Andrew Lees or Gibbins Richards.");
+    const address = data.address.trim();
+    if (!isGmailAddress(address)) throw new Error("Use the Gmail address for this branch, such as name@gmail.com.");
+    const sql = await ensureGmailMailbox();
+    const current = await sql<Row>`select client_secret, kind from mailboxes where agency = ${agency}`;
+    const saved = text(current[0]?.kind) === "smtp" ? text(current[0]?.client_secret) : "";
+    const nextSecret = data.appPassword.trim() ? data.appPassword.replace(/\s+/g, "") : saved;
+    if (!nextSecret) throw new Error("Paste the 16-character app password from that Gmail account.");
+    const live = Boolean(data.live && nextSecret);
+    await sql`
+      update mailboxes set from_address = ${address}, client_secret = ${nextSecret}, live = ${live}, kind = 'smtp',
+        from_name = ${agency === "gr" ? "Gibbins Richards Lettings" : "Andrew Lees Lettings"}
+      where agency = ${agency}
+    `;
+    return { ok: true, live };
+  });
+
+export const sendBranchGmailTest = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((data: { agency: string; address: string; appPassword: string }) => data)
+  .handler(async ({ data, context }) => {
+    const me = await ensureMe(context.userId);
+    assertManager(me.role);
+    const agency = branchAgency(data.agency);
+    if (!agency) throw new Error("Choose a branch.");
+    const address = data.address.trim();
+    if (!isGmailAddress(address)) throw new Error("Use the Gmail address for this branch, such as name@gmail.com.");
+    const sql = await ensureGmailMailbox();
+    const current = await sql<Row>`select client_secret, kind from mailboxes where agency = ${agency}`;
+    const saved = text(current[0]?.kind) === "smtp" ? text(current[0]?.client_secret) : "";
+    const password = data.appPassword.trim() ? data.appPassword.replace(/\s+/g, "") : saved;
+    await sendViaGmail(
+      address,
+      password,
+      [address],
+      `Feedy test · ${agency === "gr" ? "Gibbins Richards" : "Andrew Lees"}`,
+      `This is a test from Feedy, sent by ${me.name}. Feedback for this branch will leave from this Gmail address.`,
+    );
+    return { ok: true };
+  });
+
 export const sendFeedback = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((data: { viewingId: number; agency: string; to: string; subject: string; body: string }) => data)
@@ -1161,10 +1364,14 @@ export const sendFeedback = createServerFn({ method: "POST" })
     const agency = data.agency === "gr" ? "gr" : "al";
     const mailbox = await sql<Row>`select * from mailboxes where agency = ${agency}`;
     const gmail = await sql<Row>`select * from mailboxes where agency = 'gmail'`;
+    const branchAddress = text(mailbox[0]?.from_address);
+    const branchSecret = text(mailbox[0]?.client_secret);
+    const branchGmail = text(mailbox[0]?.kind) === "smtp" && mailbox[0]?.live === true && Boolean(branchAddress) && Boolean(branchSecret);
     const gmailAddress = text(gmail[0]?.from_address);
     const gmailSecret = text(gmail[0]?.client_secret);
     const gmailLive = gmail[0]?.live === true && Boolean(gmailAddress) && Boolean(gmailSecret);
-    const from = gmailLive ? gmailAddress : text(mailbox[0]?.from_address) || agencyEmail(agency);
+    const graphLive = mailbox[0]?.live === true && text(mailbox[0]?.kind) !== "smtp" && text(mailbox[0]?.tenant_id) && text(mailbox[0]?.client_id) && Boolean(branchSecret);
+    let from = branchGmail ? branchAddress : gmailLive ? gmailAddress : branchAddress || agencyEmail(agency);
     const recipients = data.to
       .split(/[;,]/)
       .map((item) => item.trim())
@@ -1172,21 +1379,21 @@ export const sendFeedback = createServerFn({ method: "POST" })
     if (!recipients.length) throw new Error("Enter the landlord email address.");
     let status = "not_sent";
     let error = "";
-    const live = mailbox[0]?.live === true && text(mailbox[0]?.tenant_id) && text(mailbox[0]?.client_id) && text(mailbox[0]?.client_secret);
-    if (gmailLive) {
+    if (branchGmail && mailbox[0]) {
       try {
-        await sendViaGmail(gmailAddress, gmailSecret, recipients, data.subject, data.body);
+        await sendViaGmail(branchAddress, branchSecret, recipients, data.subject, data.body);
         status = "sent";
+        from = branchAddress;
       } catch (err) {
         error = err instanceof Error ? err.message : "Gmail did not send the email.";
       }
-    } else if (live && mailbox[0]) {
+    } else if (graphLive && mailbox[0]) {
       try {
         await graphSend(
           {
             tenant: text(mailbox[0].tenant_id),
             client: text(mailbox[0].client_id),
-            secret: text(mailbox[0].client_secret),
+            secret: branchSecret,
             from,
           },
           recipients,
@@ -1197,8 +1404,16 @@ export const sendFeedback = createServerFn({ method: "POST" })
       } catch (err) {
         error = err instanceof Error ? err.message : "Microsoft did not send the email.";
       }
+    } else if (gmailLive) {
+      try {
+        await sendViaGmail(gmailAddress, gmailSecret, recipients, data.subject, data.body);
+        status = "sent";
+        from = gmailAddress;
+      } catch (err) {
+        error = err instanceof Error ? err.message : "Gmail did not send the email.";
+      }
     } else {
-      error = "Mailbox is not connected. Turn on the Gmail trial in Settings, or connect Microsoft 365. The email was kept here and was not sent.";
+      error = "Add this branch's Gmail address in Settings and tick send from this Gmail. The email was kept here and was not sent.";
     }
     await sql`
       insert into emails (viewing_id, sent_by, from_address, to_address, subject, body, agency, status, error)
@@ -1316,8 +1531,16 @@ export const getReports = createServerFn({ method: "POST" })
        order by v.viewed_on desc limit 30`,
       params,
     );
-    const total = byProperty.reduce((sum, row) => sum + num(row.viewings), 0);
-    const done = byProperty.reduce((sum, row) => sum + num(row.done), 0);
+    const scored = await sql.query<Row>(
+      `select count(*)::int as viewings,
+        count(*) filter (where v.feedback_status in ${DONE})::int as done
+       from viewings v join properties p on p.id = v.property_id
+       where ${where} and v.viewed_on < current_date`,
+      params,
+    );
+    const total = num(scored[0]?.viewings);
+    const done = num(scored[0]?.done);
+    const allViewings = byProperty.reduce((sum, row) => sum + num(row.viewings), 0);
     return {
       byProperty: byProperty.map((row) => ({
         address: text(row.address),
@@ -1334,8 +1557,8 @@ export const getReports = createServerFn({ method: "POST" })
         date: dateText(row.viewed_on) ?? "",
         interest: text(row.interest),
       })),
-      percent: total ? Math.round((done / total) * 100) : 0,
-      viewings: total,
+      percent: total ? Math.round((done / total) * 100) : 100,
+      viewings: allViewings,
     };
   });
 
@@ -1365,25 +1588,40 @@ export function emailDraft(input: {
 Kind regards,
 ${input.negotiator}
 ${agencyName(input.agency)}`;
-  if (input.noFeedback) {
+  const where = `Following the viewing at ${input.address}${input.when ? ` on ${input.when}` : ""}`;
+  const comments = viewerComments(input.feedback);
+  const given = comments ? `\n\nFeedback given:\n${comments}` : "";
+  const outcome = input.noFeedback || input.interest === "no_feedback" ? "no_feedback" : input.interest === "not_interested" ? "not_interested" : "interested";
+  if (outcome === "no_feedback") {
     return `${londonGreeting()},
 
-Following the recent viewing at ${input.address}${input.when ? ` on ${input.when}` : ""}, the applicant did not want to give feedback on the viewing.
+${where}, feedback was not given at the viewing. We will continue to chase this and be in touch.${given}
 
-We will re-chase this and try to get this feedback for you.
+${close}`;
+  }
+  if (outcome === "not_interested") {
+    return `${londonGreeting()},
+
+${where}, unfortunately the applicant is not interested in the property. We will continue booking further viewings.${given}
 
 ${close}`;
   }
   return `${londonGreeting()},
 
-Following the recent viewing at ${input.address}${input.when ? ` on ${input.when}` : ""}, I wanted to provide you with the feedback we have received.
-
-The viewer advised:
-${input.feedback || "No written comments were recorded."}
-
-Their current level of interest is: ${input.interest || "Not stated"}
-
-We will continue to keep you updated with feedback from any further viewings.
+${where}, the applicant is interested in the property and has been sent an application form to fill out. Once we have received it, we will send it over to you for review.${given}
 
 ${close}`;
+}
+
+const CANNED_FEEDBACK = new Set([
+  "The applicant is interested in the property and has been sent an application form to fill out. We will send this over once it is received.",
+  "Unfortunately the applicant is not interested in the property. We will continue booking further viewings.",
+  "Feedback was not given at the viewing. We will continue to chase this and be in touch.",
+  "The applicant did not want to give feedback on the viewing. We will re-chase this and try to get the feedback.",
+]);
+
+function viewerComments(feedback: string): string {
+  const text = feedback.trim();
+  if (!text || CANNED_FEEDBACK.has(text)) return "";
+  return text;
 }

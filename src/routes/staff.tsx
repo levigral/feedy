@@ -30,10 +30,10 @@ function StaffPage() {
       {error ? <p className="mb-3 text-sm text-bad">{error}</p> : null}
       <StaffTable staff={staff} />
       <h2 className="mt-8 font-display text-2xl">Feedback to chase</h2>
-      <p className="mt-1 max-w-2xl text-sm text-muted">Outstanding viewings are already on the negotiator who did them. Chased is the share of their viewings emailed to the landlord.</p>
+      <p className="mt-1 max-w-2xl text-sm text-muted">Outstanding viewings are already on the negotiator who did them. The chased percentage ignores today and later until the next day.</p>
       <div className="mt-3 grid gap-3">
         {staff.filter((person) => person.outstanding > 0).map((person) => {
-          const chased = person.viewings ? Math.round((person.done / person.viewings) * 100) : 0;
+          const chased = person.chased ?? 100;
           const rows = queue.filter((viewing) => viewing.negotiatorId === person.id);
           return (
             <article key={person.id} className="rounded-2xl border border-line bg-card p-4">
