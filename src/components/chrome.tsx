@@ -49,8 +49,22 @@ export function Shell({ children }: { children: ReactNode }) {
   const [agency, setAgencyState] = useState("all");
   const [passwordTick, setPasswordTick] = useState(0);
   const [open, setOpen] = useState(false);
+  const [sessionSlow, setSessionSlow] = useState(false);
   const signedOut = isSignedOutOnPurpose() && !getBearerToken();
   const path = useRouterState({ select: (state) => state.location.pathname });
+
+  useEffect(() => {
+    (window as Window & { __feedyReady?: boolean }).__feedyReady = true;
+  }, []);
+
+  useEffect(() => {
+    if (!isPending) {
+      setSessionSlow(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSessionSlow(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, [isPending]);
 
   useEffect(() => {
     const stored = localStorage.getItem("viewingdesk-agency");
@@ -72,8 +86,8 @@ export function Shell({ children }: { children: ReactNode }) {
     refreshMe();
   }, [user?.id]);
 
-  if (isPending) {
-    return <div className="grid min-h-screen place-items-center bg-paper text-muted">Opening the office book…</div>;
+  if (isPending && !sessionSlow) {
+    return <div data-feedy-boot className="grid min-h-screen place-items-center bg-paper text-muted">Opening the office book…</div>;
   }
   if (!user || signedOut) return <LoginPanel key={passwordTick} onSignedIn={() => setPasswordTick((value) => value + 1)} />;
   if (me?.mustChangePassword) {

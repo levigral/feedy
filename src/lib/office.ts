@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
-import { addressKey, isViewingEvent, reviewDiaryRow, splitPostcode } from "@/lib/diary";
+import { addressKey, addressKeysMatch, addressesLookSame, isViewingEvent, reviewDiaryRow, samePostcode, splitPostcode } from "@/lib/diary";
 import { agencyEmail, agencyName, isFeedbackComplete } from "@/lib/labels";
 import { env } from "@/lib/env.server";
 import { sendViaGmail } from "@/lib/gmail-smtp";
@@ -137,11 +137,12 @@ function namesMatch(left: string, right: string): boolean {
 }
 
 function keysMatch(left: string, right: string): boolean {
-  if (!left || !right) return false;
-  if (left === right) return true;
-  const shorter = left.length < right.length ? left : right;
-  const longer = left.length < right.length ? right : left;
-  return shorter.length >= 8 && longer.startsWith(shorter);
+  return addressKeysMatch(left, right);
+}
+
+function sameStoredAddress(item: Row, incoming: string): boolean {
+  const stored = `${text(item.address)} ${text(item.postcode)}`.trim();
+  return addressesLookSame(stored, incoming) || samePostcode(stored, incoming) || keysMatch(text(item.address_key), addressKey(incoming)) || keysMatch(addressKey(stored), addressKey(incoming));
 }
 
 function titleName(value: string): string {
@@ -569,6 +570,7 @@ type PropertyInput = {
   marketedOn: string;
   negotiatorId: number | null;
   notes: string;
+  allowDuplicate?: boolean;
 };
 
 export const saveProperty = createServerFn({ method: "POST" })
@@ -585,6 +587,24 @@ export const saveProperty = createServerFn({ method: "POST" })
     const key = addressKey(`${address} ${postcode}`);
     const marketed = data.marketedOn || null;
     const negotiator = data.negotiatorId || null;
+    if (!data.allowDuplicate) {
+      const existing = await sql<Row>`select id, address, postcode, address_key, status from properties`;
+      const match = existing.find((item) => {
+        if (data.id && num(item.id) === num(data.id)) return false;
+        return sameStoredAddress(item, `${address} ${postcode}`);
+      });
+      if (match) {
+        return {
+          id: 0,
+          duplicate: {
+            id: num(match.id),
+            address: text(match.address),
+            postcode: text(match.postcode),
+            status: text(match.status),
+          },
+        };
+      }
+    }
     if (data.id) {
       await sql.query(
         `update properties set address=$1, address_key=$2, postcode=$3, agency=$4, rent=$5,
@@ -901,6 +921,7 @@ export const importDiary = createServerFn({ method: "POST" })
     const createdStaff: string[] = [];
     const propertyRows = [...properties];
     const staffRows = [...people];
+    const createdIds = new Set<number>();
     const held = new Map<number, {
       propertyId: number;
       address: string;
@@ -956,34 +977,37 @@ export const importDiary = createServerFn({ method: "POST" })
       const landlordEmail = (row.landlordEmail || "").trim();
       const landlordName2 = (row.landlordName2 || "").trim();
       const landlordEmail2 = (row.landlordEmail2 || "").trim();
-      const sameAddress = (item: Row) =>
-        keysMatch(text(item.address_key), key) || keysMatch(addressKey(`${text(item.address)} ${text(item.postcode)}`), key);
+      const sameAddress = (item: Row) => sameStoredAddress(item, address);
       let property = row.reuseId ? propertyRows.find((item) => num(item.id) === num(row.reuseId)) : undefined;
       if (property && historicStatus(text(property.status))) {
         await sql`update properties set status = 'available' where id = ${num(property.id)}`;
         property.status = "available";
         await logActivity(num(property.id), "Back on the market", "New viewing imported. Previous landlord details kept.", me.name);
       }
+      if (row.forceNew) {
+        property = propertyRows.find((item) => createdIds.has(num(item.id)) && sameAddress(item));
+      }
       if (!property && !row.forceNew) {
-        const matches = propertyRows.filter(sameAddress);
-        const live = matches.find((item) => !historicStatus(text(item.status)));
-        const past = matches.find((item) => historicStatus(text(item.status)));
-        if (live) property = live;
-        else if (past) {
-          const propertyId = num(past.id);
-          const group = held.get(propertyId) ?? {
-            propertyId,
-            address: text(past.address),
-            status: text(past.status),
-            landlordName: text(past.landlord_name),
-            landlordEmail: text(past.landlord_email),
-            landlordName2: text(past.landlord_name_2),
-            landlordEmail2: text(past.landlord_email_2),
-            rows: [],
-          };
-          group.rows.push(row);
-          held.set(propertyId, group);
-          continue;
+        const fresh = propertyRows.find((item) => createdIds.has(num(item.id)) && sameAddress(item));
+        if (fresh) property = fresh;
+        else {
+          const chosen = propertyRows.find((item) => !createdIds.has(num(item.id)) && sameAddress(item));
+          if (chosen) {
+            const propertyId = num(chosen.id);
+            const group = held.get(propertyId) ?? {
+              propertyId,
+              address: text(chosen.address),
+              status: text(chosen.status),
+              landlordName: text(chosen.landlord_name),
+              landlordEmail: text(chosen.landlord_email),
+              landlordName2: text(chosen.landlord_name_2),
+              landlordEmail2: text(chosen.landlord_email_2),
+              rows: [],
+            };
+            group.rows.push(row);
+            held.set(propertyId, group);
+            continue;
+          }
         }
       }
       if (!property) {
@@ -1000,6 +1024,7 @@ export const importDiary = createServerFn({ method: "POST" })
         property = inserted[0];
         if (property) {
           propertyRows.push(property);
+          createdIds.add(num(property.id));
           createdProperties += 1;
           await logActivity(num(property.id), "Property added", "Created from the diary", me.name);
         }
@@ -1077,7 +1102,8 @@ export const importDiary = createServerFn({ method: "POST" })
         num(insertedViewing[0]?.id),
       );
     }
-    return { createdProperties, createdViewings, namedViewings, createdStaff, skipped, letAgreed: [...held.values()] };
+    const duplicates = [...held.values()];
+    return { createdProperties, createdViewings, namedViewings, createdStaff, skipped, duplicates, letAgreed: duplicates };
   });
 
 export const deleteViewing = createServerFn({ method: "POST" })

@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Badge, buttonClass, Field, inputClass, Modal, PageTitle, quietClass, useOffice } from "@/components/chrome";
-import { emptyProperty } from "@/components/property-form";
+import { DuplicatePropertyPrompt, emptyProperty } from "@/components/property-form";
 import { agencyFromFilename, diaryColumnWarnings, parseDiaryMatrix, prepareDiaryImport, type DraftViewing } from "@/lib/diary";
 import { matrixFromFile } from "@/lib/diary-file";
 import { UkDateInput } from "@/components/uk-date";
@@ -80,9 +80,9 @@ function ViewingsPage() {
   function summaryText(summary: ImportSummary, fileName?: string) {
     const names = summary.createdStaff.length ? ` New staff: ${summary.createdStaff.join(", ")}.` : "";
     const viewers = summary.namedViewings ? ` Viewer names added to ${summary.namedViewings} viewing${summary.namedViewings === 1 ? "" : "s"}.` : "";
-    const ask = summary.letAgreed.length ? ` ${summary.letAgreed.length} already let agreed — choose whether to keep the old landlord details.` : "";
+    const ask = summary.duplicates.length ? ` ${summary.duplicates.length} ${summary.duplicates.length === 1 ? "address is" : "addresses are"} already on the system. Choose whether to add a new property.` : "";
     const lead = fileName ? `${fileName}: ` : "";
-    return `${lead}${summary.createdViewings} viewings added, ${summary.createdProperties} new properties. Addresses already on the system were not added again.${names}${viewers}${ask}`;
+    return `${lead}${summary.createdViewings} viewings added, ${summary.createdProperties} new properties.${names}${viewers}${ask}`;
   }
 
   function load() {
@@ -153,7 +153,7 @@ function ViewingsPage() {
       const summary = await importDiary({
         data: { rows: chosen.map((row) => diaryRow(row, row.agency)) },
       });
-      rememberMatches(summary.letAgreed);
+      rememberMatches(summary.duplicates);
       setResult(summaryText(summary));
       setFiles((current) => current
         .map((file) => {
@@ -175,18 +175,18 @@ function ViewingsPage() {
     try {
       const summary = await importDiary({
         data: {
-          rows: match.rows.map((row, index) => ({
+          rows: match.rows.map((row) => ({
             ...row,
             reuseId: reuse ? match.propertyId : undefined,
-            forceNew: reuse || index > 0 ? undefined : true,
+            forceNew: reuse ? undefined : true,
           })),
         },
       });
       setLetAgreed((current) => current.filter((item) => item.propertyId !== match.propertyId));
-      rememberMatches(summary.letAgreed);
+      rememberMatches(summary.duplicates);
       setResult(reuse
-        ? `${match.address} is back on the market with the previous landlord details. ${summary.createdViewings} viewings added.`
-        : `${match.address} was added as a new property so you can enter the new landlord. ${summary.createdViewings} viewings added.`);
+        ? `${match.address} was not added again. ${summary.createdViewings} viewings were put on the property already on the system.`
+        : `${match.address} was added as a new property. ${summary.createdViewings} viewings added.`);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save that choice");
@@ -264,14 +264,17 @@ function ViewingsPage() {
           const previous = [match.landlordName, match.landlordEmail, match.landlordName2, match.landlordEmail2].filter((item) => item && item !== "To be added");
           return (
             <article key={match.propertyId} className="mt-4 rounded-2xl border border-line bg-paper p-4">
-              <h3 className="font-medium">{match.address} is already let agreed</h3>
+              <h3 className="font-medium">{match.address} is already on the system</h3>
               <p className="mt-1 text-sm text-muted">
-                {match.rows.length} viewing{match.rows.length === 1 ? "" : "s"} in this diary.
-                {previous.length ? ` Previous landlord: ${previous.join(" · ")}.` : " No landlord details were saved last time."}
+                {match.rows.length} viewing{match.rows.length === 1 ? "" : "s"} in this diary match it{match.status ? ` (${statusLabel(match.status)})` : ""}.
+                {previous.length ? ` Landlord on file: ${previous.join(" · ")}.` : ""}
+                {match.status === "let_agreed"
+                  ? " Using the property already on the system will put it back on the market and keep those landlord details."
+                  : " Choose not to add it if this is the same property. The viewings will go on the one already there."}
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                <button type="button" className={buttonClass} disabled={busy} onClick={() => void decideLetAgreed(match, true)}>Use previous landlord details</button>
-                <button type="button" className={quietClass} disabled={busy} onClick={() => void decideLetAgreed(match, false)}>New property, new landlord</button>
+                <button type="button" className={buttonClass} disabled={busy} onClick={() => void decideLetAgreed(match, true)}>Don't add a new property</button>
+                <button type="button" className={quietClass} disabled={busy} onClick={() => void decideLetAgreed(match, false)}>Add it as a new property</button>
               </div>
             </article>
           );
@@ -357,6 +360,7 @@ function ManualViewing({
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [clash, setClash] = useState<{ id: number; address: string; postcode: string; status: string } | null>(null);
 
   useEffect(() => {
     listProperties().then(setProperties).catch(() => setProperties([]));
@@ -371,17 +375,25 @@ function ManualViewing({
     return hay.includes(filter.toLowerCase());
   });
 
-  async function save() {
+  async function save(options?: { allowDuplicate?: boolean; existingId?: number }) {
     setBusy(true);
     setError("");
     try {
-      let id = propertyId;
+      let id = options?.existingId ?? propertyId;
       if (!id) {
         const line = address.trim();
         if (!line) throw new Error("Choose a property, or type the address of a new one.");
-        const created = await saveProperty({ data: { ...emptyProperty, address: line, postcode, agency: propertyAgency } });
+        const created = await saveProperty({
+          data: { ...emptyProperty, address: line, postcode, agency: propertyAgency, allowDuplicate: options?.allowDuplicate },
+        });
+        if (created.duplicate) {
+          setClash(created.duplicate);
+          setBusy(false);
+          return;
+        }
         id = created.id;
       }
+      if (!id) throw new Error("Choose a property, or type the address of a new one.");
       await addViewing({
         data: { propertyId: id, date, time, viewerName, viewerPhone, viewerEmail, negotiatorId, notes, immediate: false },
       });
@@ -394,6 +406,17 @@ function ManualViewing({
 
   return (
     <Modal title="Add viewing" onClose={onClose}>
+      {clash ? (
+        <DuplicatePropertyPrompt
+          address={clash.address}
+          postcode={clash.postcode}
+          status={clash.status}
+          busy={busy}
+          skipLabel="Don't add a new property"
+          onSkip={() => { void save({ existingId: clash.id }); }}
+          onAddAnyway={() => { void save({ allowDuplicate: true }); }}
+        />
+      ) : (
       <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <Field label="Find a property">
           <input className={inputClass} value={filter} placeholder="Search address" onChange={(event) => setFilter(event.target.value)} />
@@ -433,6 +456,7 @@ function ManualViewing({
         {error ? <p className="text-sm text-bad">{error}</p> : null}
         <button type="submit" className={buttonClass} disabled={busy}>{busy ? "Saving…" : "Save viewing"}</button>
       </form>
+      )}
     </Modal>
   );
 }

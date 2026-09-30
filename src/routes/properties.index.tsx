@@ -3,7 +3,7 @@ import { buttonClass, Field, inputClass, Modal, PageTitle, quietClass, useOffice
 import { agencyName, statusLabel } from "@/lib/labels";
 import { archiveProperty, listProperties, listStaff, saveProperty } from "@/lib/office";
 import { useEffect, useState } from "react";
-import { PropertyForm, emptyProperty } from "@/components/property-form";
+import { PropertyForm, emptyProperty, type PropertyFormValue, DuplicatePropertyPrompt } from "@/components/property-form";
 
 export const Route = createFileRoute("/properties/")({ component: PropertiesPage });
 
@@ -17,6 +17,8 @@ function PropertiesPage() {
   const [error, setError] = useState("");
   const [remove, setRemove] = useState<{ id: number; address: string } | null>(null);
   const [confirmText, setConfirmText] = useState("");
+  const [pending, setPending] = useState<PropertyFormValue | null>(null);
+  const [clash, setClash] = useState<{ id: number; address: string; postcode: string; status: string } | null>(null);
 
   function load() {
     listProperties().then(setRows).catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not load properties"));
@@ -74,9 +76,29 @@ function PropertiesPage() {
             initial={{ ...emptyProperty, agency: agency === "gr" ? "gr" : "al" }}
             onCancel={() => setOpen(false)}
             onSave={async (value) => {
-              await saveProperty({ data: value });
+              const saved = await saveProperty({ data: value });
+              if (saved.duplicate) {
+                setPending(value);
+                setClash(saved.duplicate);
+                return;
+              }
               setOpen(false);
               load();
+            }}
+          />
+        </Modal>
+      ) : null}
+      {clash && pending ? (
+        <Modal title="This property is already on the system" onClose={() => { setClash(null); setPending(null); }}>
+          <DuplicatePropertyPrompt
+            address={clash.address}
+            postcode={clash.postcode}
+            status={clash.status}
+            onSkip={() => { setClash(null); setPending(null); setOpen(false); }}
+            onAddAnyway={() => {
+              void saveProperty({ data: { ...pending, allowDuplicate: true } })
+                .then(() => { setClash(null); setPending(null); setOpen(false); load(); })
+                .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not add the property"));
             }}
           />
         </Modal>

@@ -144,14 +144,149 @@ export function splitPostcode(address: string): { address: string; postcode: str
   };
 }
 
+const HOUSE_NUMBERS: Record<string, number> = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+};
+
+const ADDRESS_FILLER = new Set(["viewing", "at", "the", "number", "no", "num", "nr"]);
+
+function houseTokens(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i] ?? "";
+    if (!token || ADDRESS_FILLER.has(token)) continue;
+    const word = HOUSE_NUMBERS[token];
+    if (word == null) {
+      out.push(token);
+      continue;
+    }
+    const next = HOUSE_NUMBERS[tokens[i + 1] ?? ""];
+    if (word >= 20 && word % 10 === 0 && next != null && next < 10) {
+      out.push(String(word + next));
+      i += 1;
+      continue;
+    }
+    out.push(String(word));
+  }
+  return out;
+}
+
 export function addressKey(raw: string): string {
   const { address, postcode } = splitPostcode(raw);
-  const tokens = `${address} ${postcode}`
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((token) => token && !["viewing", "at", "the"].includes(token));
+  const tokens = houseTokens(
+    `${address} ${postcode}`
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean),
+  );
   return tokens.slice(0, 6).join("");
+}
+
+export function addressKeysMatch(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const shorter = left.length < right.length ? left : right;
+  const longer = left.length < right.length ? right : left;
+  return shorter.length >= 8 && longer.startsWith(shorter);
+}
+
+const STREET_TYPES: Record<string, string> = {
+  close: "close",
+  cl: "close",
+  road: "road",
+  rd: "road",
+  street: "street",
+  st: "street",
+  avenue: "avenue",
+  ave: "avenue",
+  lane: "lane",
+  ln: "lane",
+  drive: "drive",
+  dr: "drive",
+  way: "way",
+  crescent: "crescent",
+  cres: "crescent",
+  gardens: "gardens",
+  place: "place",
+  pl: "place",
+  court: "court",
+  ct: "court",
+  terrace: "terrace",
+  grove: "grove",
+  hill: "hill",
+  park: "park",
+  row: "row",
+  mews: "mews",
+  square: "square",
+  sq: "square",
+  walk: "walk",
+  rise: "rise",
+  view: "view",
+};
+
+function addressCore(raw: string): string {
+  const { address } = splitPostcode(raw);
+  const tokens = houseTokens(
+    address
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean),
+  );
+  let end = -1;
+  tokens.forEach((token, index) => {
+    if (STREET_TYPES[token]) end = index;
+  });
+  const core = end === -1 ? tokens : tokens.slice(0, end + 1);
+  if (core.length && STREET_TYPES[core[core.length - 1] ?? ""]) {
+    core[core.length - 1] = STREET_TYPES[core[core.length - 1] ?? ""] ?? core[core.length - 1];
+  }
+  return core.join("");
+}
+
+export function addressesLookSame(left: string, right: string): boolean {
+  const a = addressCore(left);
+  const b = addressCore(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = a.length < b.length ? a : b;
+  const longer = a.length < b.length ? b : a;
+  if (shorter.length < 6 || !longer.startsWith(shorter)) return false;
+  return Object.values(STREET_TYPES).includes(longer.slice(shorter.length));
+}
+
+export function samePostcode(left: string, right: string): boolean {
+  const a = left.match(UK_POSTCODE)?.[1]?.toUpperCase().replace(/\s+/g, "") ?? "";
+  const b = right.match(UK_POSTCODE)?.[1]?.toUpperCase().replace(/\s+/g, "") ?? "";
+  return a.length >= 5 && a === b;
 }
 
 function cell(row: string[], index: number | undefined): string {

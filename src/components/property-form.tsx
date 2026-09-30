@@ -1,5 +1,6 @@
 import { buttonClass, Field, inputClass, quietClass } from "@/components/chrome";
 import { UkDateInput } from "@/components/uk-date";
+import { statusLabel } from "@/lib/labels";
 import { useState } from "react";
 
 export type PropertyFormValue = {
@@ -18,6 +19,38 @@ export type PropertyFormValue = {
   negotiatorId: number | null;
   notes: string;
 };
+
+export function DuplicatePropertyPrompt({
+  address,
+  postcode,
+  status,
+  busy,
+  skipLabel = "Don't add this property",
+  addLabel = "Add it as a new property",
+  onSkip,
+  onAddAnyway,
+}: {
+  address: string;
+  postcode?: string;
+  status?: string;
+  busy?: boolean;
+  skipLabel?: string;
+  addLabel?: string;
+  onSkip: () => void;
+  onAddAnyway: () => void;
+}) {
+  const place = [address, postcode].filter(Boolean).join(", ");
+  return (
+    <div className="grid gap-3">
+      <p className="text-sm">{place} is already on the system{status ? ` (${statusLabel(status)})` : ""}.</p>
+      <p className="text-sm text-muted">You can leave that property as it is, or add this one as well if it really is a different property.</p>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={buttonClass} disabled={busy} onClick={onSkip}>{skipLabel}</button>
+        <button type="button" className={quietClass} disabled={busy} onClick={onAddAnyway}>{addLabel}</button>
+      </div>
+    </div>
+  );
+}
 
 export const emptyProperty: PropertyFormValue = {
   address: "",

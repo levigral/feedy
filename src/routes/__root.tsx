@@ -62,6 +62,12 @@ export const Route = createRootRoute({
             <Outlet />
           </Shell>
         </AuthProvider>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              'setTimeout(function(){if(window.__feedyReady)return;var el=document.querySelector("[data-feedy-boot]");if(el)el.textContent="Feedy did not finish opening. Refresh the page. If it stays on this message, publish the app again.";},8000);',
+          }}
+        />
         <Scripts />
       </body>
     </html>

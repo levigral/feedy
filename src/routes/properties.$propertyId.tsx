@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Badge, buttonClass, Field, inputClass, Modal, Progress, quietClass, useOffice } from "@/components/chrome";
 import { UkDateInput } from "@/components/uk-date";
-import { PropertyForm } from "@/components/property-form";
+import { DuplicatePropertyPrompt, PropertyForm, type PropertyFormValue } from "@/components/property-form";
 import { agencyEmail, agencyName, ageLabel, feedbackTone, formatUk, isFeedbackComplete, statusLabel, todayIso } from "@/lib/labels";
 import { addViewing, archiveProperty, decideApplication, emailDraft, getProperty, getSettings, listStaff, markApplication, markContacted, saveFeedback, saveLandlord, saveProperty, sendFeedback, setLetAgreed } from "@/lib/office";
 import { useEffect, useState } from "react";
@@ -37,6 +37,8 @@ function PropertyPage() {
   const [staff, setStaff] = useState<Awaited<ReturnType<typeof listStaff>>>([]);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
+  const [pendingEdit, setPendingEdit] = useState<PropertyFormValue | null>(null);
+  const [clash, setClash] = useState<{ id: number; address: string; postcode: string; status: string } | null>(null);
   const [viewingOpen, setViewingOpen] = useState(false);
   const [feedbackId, setFeedbackId] = useState<number | null>(null);
   const [mailId, setMailId] = useState<number | null>(null);
@@ -184,11 +186,36 @@ function PropertyPage() {
               notes: property.notes,
             }}
             onCancel={() => setEditing(false)}
-            onSave={async (value) => { await saveProperty({ data: value }); setEditing(false); load(); }}
+            onSave={async (value) => {
+              const saved = await saveProperty({ data: value });
+              if (saved.duplicate) {
+                setPendingEdit(value);
+                setClash(saved.duplicate);
+                return;
+              }
+              setEditing(false);
+              load();
+            }}
           />
           {me?.role === "admin" || me?.role === "manager" ? (
             <button type="button" className="mt-3 text-sm text-bad" onClick={() => { void archiveProperty({ data: { id: property.id } }).then(() => { setEditing(false); load(); }); }}>Withdraw this property</button>
           ) : null}
+        </Modal>
+      ) : null}
+      {clash && pendingEdit ? (
+        <Modal title="This property is already on the system" onClose={() => { setClash(null); setPendingEdit(null); }}>
+          <DuplicatePropertyPrompt
+            address={clash.address}
+            postcode={clash.postcode}
+            status={clash.status}
+            skipLabel="Don't save this address"
+            onSkip={() => { setClash(null); setPendingEdit(null); }}
+            onAddAnyway={() => {
+              void saveProperty({ data: { ...pendingEdit, allowDuplicate: true } })
+                .then(() => { setClash(null); setPendingEdit(null); setEditing(false); load(); })
+                .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not save the property"));
+            }}
+          />
         </Modal>
       ) : null}
       {viewingOpen ? <ViewingModal propertyId={property.id} staff={staff} defaultStaff={me?.id ?? 0} onClose={() => setViewingOpen(false)} onSaved={() => { setViewingOpen(false); load(); }} /> : null}
