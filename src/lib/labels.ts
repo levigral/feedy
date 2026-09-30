@@ -53,6 +53,10 @@ export function statusLabel(status: string): string {
       return "Undecided";
     case "no_feedback":
       return "Feedback not given";
+    case "no_show":
+      return "No show";
+    case "cancelled":
+      return "Viewing cancelled";
     default:
       return status;
   }

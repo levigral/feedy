@@ -745,6 +745,8 @@ export const saveFeedback = createServerFn({ method: "POST" })
     if (!current[0]) throw new Error("Viewing not found");
     let status = "received";
     if (data.interest === "no_feedback") status = "awaiting";
+    else if (data.interest === "no_show") status = "no_show";
+    else if (data.interest === "cancelled") status = "cancelled";
     else if (data.interest === "very_interested" || data.interest === "interested") status = "interested";
     else if (data.interest === "not_interested") status = "not_interested";
     else if (text(current[0].feedback_status) === "sent") status = "sent";
@@ -1591,7 +1593,30 @@ ${agencyName(input.agency)}`;
   const where = `Following the viewing at ${input.address}${input.when ? ` on ${input.when}` : ""}`;
   const comments = viewerComments(input.feedback);
   const given = comments ? `\n\nFeedback given:\n${comments}` : "";
-  const outcome = input.noFeedback || input.interest === "no_feedback" ? "no_feedback" : input.interest === "not_interested" ? "not_interested" : "interested";
+  const outcome =
+    input.noFeedback || input.interest === "no_feedback"
+      ? "no_feedback"
+      : input.interest === "not_interested"
+        ? "not_interested"
+        : input.interest === "no_show"
+          ? "no_show"
+          : input.interest === "cancelled"
+            ? "cancelled"
+            : "interested";
+  if (outcome === "no_show") {
+    return `${londonGreeting()},
+
+${where}, unfortunately the applicant did not show up for the viewing. We will continue to book further viewings at the property.${given}
+
+${close}`;
+  }
+  if (outcome === "cancelled") {
+    return `${londonGreeting()},
+
+${where}, unfortunately the viewing was cancelled. We will continue to book further viewings at the property, and we will try to reschedule this viewing if possible.${given}
+
+${close}`;
+  }
   if (outcome === "no_feedback") {
     return `${londonGreeting()},
 

@@ -48,7 +48,6 @@ const globalRef = globalThis as typeof globalThis & {
   __pgSqlPromise__?: Promise<Sql>;
   __pgliteInstance__?: Promise<import("@electric-sql/pglite").PGlite>;
   __pgliteMigrateChain__?: Promise<void>;
-  __dummyViewingsSeeded?: boolean;
 };
 
 /**
@@ -170,12 +169,12 @@ async function createPgliteSql(): Promise<Sql> {
 }
 
 async function seedDummyViewings(pg: import("@electric-sql/pglite").PGlite) {
-  if (globalRef.__dummyViewingsSeeded) return;
   try {
     const existing = await pg.query<{ id: number }>(
       "select id from properties where address_key = '12dummyclosetest' limit 1",
     );
-    if (existing.rows.length === 0) {
+    let propertyId = existing.rows[0]?.id;
+    if (!propertyId) {
       const inserted = await pg.query<{ id: number }>(
         `insert into properties (
           address, address_key, postcode, agency, rent, landlord_name, landlord_email, status, notes
@@ -185,8 +184,8 @@ async function seedDummyViewings(pg: import("@electric-sql/pglite").PGlite) {
           'Dummy property for testing. Safe to delete.'
         ) returning id`,
       );
-      const id = inserted.rows[0]?.id;
-      if (id) {
+      propertyId = inserted.rows[0]?.id;
+      if (propertyId) {
         await pg.query(
           `insert into viewings (
             property_id, viewed_on, viewed_at, viewer_name, feedback_status, interest,
@@ -194,11 +193,24 @@ async function seedDummyViewings(pg: import("@electric-sql/pglite").PGlite) {
           ) values
             ($1, '2026-09-29', '10:00', 'Alex Morgan', 'awaiting', '', '', '', 'Dummy viewing'),
             ($1, '2026-09-28', '14:30', 'Sam Patel', 'sent', 'interested', 'across', 'Would like to apply for the property.', 'Dummy viewing')`,
-          [id],
+          [propertyId],
         );
       }
     }
-    globalRef.__dummyViewingsSeeded = true;
+    if (!propertyId) return;
+    const testViewing = await pg.query<{ id: number }>(
+      "select id from viewings where property_id = $1 and viewer_name = 'Riley Cole' limit 1",
+      [propertyId],
+    );
+    if (testViewing.rows.length === 0) {
+      await pg.query(
+        `insert into viewings (
+          property_id, viewed_on, viewed_at, viewer_name, feedback_status, interest,
+          application_status, feedback_text, notes
+        ) values ($1, '2026-09-30', '11:00', 'Riley Cole', 'awaiting', '', '', '', 'Dummy viewing for no show and cancelled')`,
+        [propertyId],
+      );
+    }
   } catch (err) {
     console.error("Could not add dummy viewings", err);
   }

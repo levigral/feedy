@@ -18,11 +18,13 @@ const FEEDBACK_OPTIONS = [
   ["interested", "Interested"],
   ["not_interested", "Not interested"],
   ["no_feedback", "Feedback not given"],
+  ["no_show", "No show"],
+  ["cancelled", "Cancelled viewing"],
 ] as const;
 
 function selectedInterest(interest: string): string {
   if (interest === "interested" || interest === "very_interested") return "interested";
-  if (interest === "not_interested" || interest === "no_feedback") return interest;
+  if (interest === "not_interested" || interest === "no_feedback" || interest === "no_show" || interest === "cancelled") return interest;
   return "";
 }
 
@@ -287,7 +289,7 @@ function FeedbackModal({ viewing, onClose, onSaved }: { viewing: { id: number; i
   function save(event: { preventDefault: () => void }) {
     event.preventDefault();
     if (!interest) {
-      setError("Choose Interested, Not interested, or Feedback not given.");
+      setError("Choose Interested, Not interested, Feedback not given, No show, or Cancelled viewing.");
       return;
     }
     setBusy(true);
@@ -347,7 +349,7 @@ function MailModal({
   const [landlordEmail, setLandlordEmail] = useState(viewing.landlordEmail);
   const [landlordEmail2, setLandlordEmail2] = useState(viewing.landlordEmail2);
   const [to, setTo] = useState([viewing.landlordEmail, viewing.landlordEmail2].filter(Boolean).join(", "));
-  const noFeedback = viewing.interest === "no_feedback";
+  const noFeedback = viewing.interest === "no_feedback" || viewing.interest === "no_show" || viewing.interest === "cancelled";
   const [subject, setSubject] = useState(`${noFeedback ? "Viewing update" : "Viewing feedback"} — ${viewing.address}`);
   const [body, setBody] = useState(emailDraft({
     landlord: viewing.landlordName,
